@@ -1,5 +1,8 @@
 use crate::lvl1::copy_unsafe;
-use std::arch::x86_64::{__cpuid_count, __m256, _mm256_storeu_ps};
+use std::arch::x86_64::{
+    __cpuid_count, __m256, _mm256_add_ps, _mm256_cvtss_f32, _mm256_permute_ps,
+    _mm256_permute2f128_ps,
+};
 
 /// Fills an existing buffer with random values in range `[-1.0, 1.0]`
 #[inline(always)]
@@ -23,15 +26,23 @@ fn test_gen_fill() {
     assert!(buf.iter().all(|&x| (-1.0..=1.0).contains(&x)));
 }
 
-/// Performs a horizontal add (reduction) of an `__m256` vector and returns the result as a `f32`
+/// Performs a horizontal add (reduction) of an `_m256` vector and returns the result as a `f32`
 #[inline(always)]
 pub fn from_m256(v: __m256) -> f32 {
-    let tmp = [0.0f32; 8];
     unsafe {
-        _mm256_storeu_ps(tmp.as_ptr() as *mut f32, v);
-        tmp.iter().sum()
+        // first pass
+        let hi = _mm256_permute2f128_ps(v, v, 1);
+        let sum = _mm256_add_ps(v, hi);
+        let hi = _mm256_permute_ps(sum, 0b01001110);
+
+        // second pass
+        let sum = _mm256_add_ps(sum, hi);
+        let hi = _mm256_permute_ps(sum, 0b10110001);
+        let sum = _mm256_add_ps(sum, hi);
+        _mm256_cvtss_f32(sum)
     }
 }
+
 #[inline(always)]
 /// Transposes a matrix `src` of dimensions `rows x cols` into `dest` of dimensions `cols x rows` using a blocked approach for cache efficiency
 pub fn mat_transpose(src: &[f32], dest: &mut [f32], rows: usize, cols: usize) {
