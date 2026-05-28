@@ -26,6 +26,7 @@ TODO:
 - test code ref from [this](https://github.com/OpenMathLib/OpenBLAS/tree/develop) repo, currently ai-generated
 - multithreading, GPU maybe?
 - LESS BRANCHING, more SIMD, LESS FN CALLS, better DATA_READ
+- HOLY SHIT TOOOO SLOWWWWWWW KERNELS!!!!!
 
 run [bench](./bench/bencher.rs) using
 `cargo run --bin bencher --release all` [ref](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark)
@@ -39,18 +40,14 @@ run [bench](./bench/bencher.rs) using
 > all are single threaded!!! ran on i7 14650hx, rust 1.95.0 -
 > looks like my bench is way too good, since openblas isn't running NATIVE
 
-### axpy
-
+**axpy**
 ![plot](bench/plot/axpy.png)
 
-### dot
-
+**dot**
 ![plot](bench/plot/dot.png)
 
-### gemv
-
+**gemv**
 ![plot](bench/plot/gemv.png)
 
-### gemv_t
-
+**gemv_t**
 ![plot](bench/plot/gemv_t.png)

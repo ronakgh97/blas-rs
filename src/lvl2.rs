@@ -1,9 +1,8 @@
-use crate::lvl1::{axpy, axpy_no_checks, dot, dot_no_checks, scal};
+use crate::lvl1::{axpy, axpy_unsafe, dot, dot_unsafe, scal};
 use std::arch::x86_64::{_MM_HINT_ET0, _mm_prefetch};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 // TODO: the order of checks can be improved, if done smartly to avoid unnecessary compute
-
 // TODO: minimal branching, checks and (buffered) fn call overhead, clean doc
 
 #[allow(clippy::too_many_arguments)]
@@ -59,12 +58,11 @@ pub fn gemv(
         return;
     }
 
-    // TODO: assuming max 64kb cache
     // How many columns to process before we proceed to next block
-    let col_block: usize = { (n / 4).clamp(1, 16_384) };
+    const COL_BLOCK: usize = 128;
 
     // How many rows to proceed at once
-    let row_block: usize = { (m / 4).clamp(1, 16_384) };
+    const ROW_BLOCK: usize = 64;
 
     // We have taken `!trans` because, default is column major,
     // so for simd we need contigous memory, and this is fine place to use `axpy` from lvl1.
@@ -86,8 +84,8 @@ pub fn gemv(
         // Step through rows in chunks of `row_block`,
         // we will process a block of cols for each row block,
         // so that we can reuse the data in cache, and also apply simd on that block of rows
-        for row in (0..m).step_by(row_block) {
-            let row_end = (row + row_block).min(m); // <- handle last block (same reason)
+        for row in (0..m).step_by(ROW_BLOCK) {
+            let row_end = (row + ROW_BLOCK).min(m); // <- handle last block (same reason)
             let curr_m = row_end - row; // <- current element in the row block, we compute on this many element only for this block
 
             // Calculate exact memory bounds for y_buf and get local len of the y_buf for this block,
@@ -114,7 +112,7 @@ pub fn gemv(
             // Experiment
             unsafe {
                 _mm_prefetch(
-                    y.as_ptr().add((row + 2 * row_block).min(y.len())) as *const i8,
+                    y.as_ptr().add((row + 2 * ROW_BLOCK).min(y.len())) as *const i8,
                     _MM_HINT_ET0,
                 );
             }
@@ -124,8 +122,8 @@ pub fn gemv(
             let y_buf = unsafe { from_raw_parts_mut(y_ptr, y_buf_len) };
 
             // Step through columns in chunks of `col_block`
-            for col in (0..n).step_by(col_block) {
-                let col_end = (col + col_block).min(n); // <- handle last block which might be smaller than col_block
+            for col in (0..n).step_by(COL_BLOCK) {
+                let col_end = (col + COL_BLOCK).min(n); // <- handle last block which might be smaller than col_block
 
                 unsafe {
                     // iter over all element in col 'tile'
@@ -142,7 +140,7 @@ pub fn gemv(
                         // Compute this chunk
                         // Partial result for this column,
                         // res_buf <- |alpha * col[0] * x[0]| + ... + |alpha * col[n] * x[n]|.
-                        axpy_no_checks(curr_m, alpha * x_val, col_buf, 1, y_buf, incy); // <-- we put incx as 1 because x which is col is contiguous, go through cmt if you down get it
+                        axpy_unsafe(curr_m, alpha * x_val, col_buf, 1, y_buf, incy); // <-- we put incx as 1 because x which is col is contiguous, go through cmt if you down get it
                     }
                 }
             }
@@ -164,8 +162,8 @@ pub fn gemv(
         };
 
         // outer loop (X-vector)
-        for row in (0..m).step_by(row_block) {
-            let row_end = (row + row_block).min(m);
+        for row in (0..m).step_by(ROW_BLOCK) {
+            let row_end = (row + ROW_BLOCK).min(m);
             let curr_m = row_end - row;
 
             // Calculate exact memory bounds and starting addr for x_buf
@@ -180,7 +178,7 @@ pub fn gemv(
             // Experiment
             unsafe {
                 _mm_prefetch(
-                    x.as_ptr().add((row + 2 * row_block).min(x.len())) as *const i8,
+                    x.as_ptr().add((row + 2 * ROW_BLOCK).min(x.len())) as *const i8,
                     _MM_HINT_ET0,
                 );
             }
@@ -191,8 +189,8 @@ pub fn gemv(
             let x_buf = unsafe { from_raw_parts(x_ptr, x_buf_len) };
 
             // inner loop (Y-vector)
-            for col in (0..n).step_by(col_block) {
-                let col_end = (col + col_block).min(n); // <- handle last
+            for col in (0..n).step_by(COL_BLOCK) {
+                let col_end = (col + COL_BLOCK).min(n); // <- handle last
 
                 unsafe {
                     let yb_ptr = y.as_mut_ptr();
@@ -204,7 +202,7 @@ pub fn gemv(
                         let col_buf = from_raw_parts(col_ptr, curr_m);
 
                         // use `dot` from lvl1, performs col_buf * x_buf
-                        let dot_val = dot_no_checks(curr_m, col_buf, 1, x_buf, incx); // <- again incx is 1 here, same reason
+                        let dot_val = dot_unsafe(curr_m, col_buf, 1, x_buf, incx); // <- again incx is 1 here, same reason
 
                         // Get location for y[i] and partial apply dot
                         let iy = iy_b + (i as isize * incy as isize);

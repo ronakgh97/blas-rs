@@ -1,4 +1,4 @@
-use crate::lvl1::{axpy, axpy_no_checks, dot, dot_no_checks, scal};
+use crate::lvl1::{axpy, axpy_unsafe, dot, dot_unsafe, scal};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 // TODO: minimal branching, checks and (buffered) fn call overhead, clean doc
@@ -72,11 +72,11 @@ pub fn gemm(
     let c_ptr = c.as_mut_ptr();
 
     // Number of columns of B to process in one block
-    let block_n = { (n / 4).clamp(1, 16_348) };
+    let block_n = 160;
     // Number of rows of A to process in one block
-    let block_m = { (m / 4).clamp(1, 16_348) };
+    let block_m = 128;
     // Number of elements in the inner dimension to process in one block,
-    let block_k = { (k / 4).clamp(1, 16_348) };
+    let block_k = 64;
 
     match (is_trans_a, is_trans_b) {
         // C = alpha * A * B + beta * C
@@ -124,7 +124,7 @@ pub fn gemm(
 
                                     // `axpy` C_col = C_col + (scaled_b * A_col)
                                     unsafe {
-                                        axpy_no_checks(curr_e, scale_b, a_col_buf, 1, c_col_buf, 1); // <- inc* are 1, since cols of A & C are contiguous no matter
+                                        axpy_unsafe(curr_e, scale_b, a_col_buf, 1, c_col_buf, 1); // <- inc* are 1, since cols of A & C are contiguous no matter
                                     }
                                 }
                             }
@@ -175,7 +175,7 @@ pub fn gemm(
                                     // compute & apply, using `mul_add` FMA
                                     unsafe {
                                         let partial =
-                                            dot_no_checks(buf_len, a_row_buf, 1, b_col_buf, 1);
+                                            dot_unsafe(buf_len, a_row_buf, 1, b_col_buf, 1);
                                         *c_col_ptr.add(r_off) =
                                             alpha.mul_add(partial, *c_col_ptr.add(r_off)); // use rdx because c_col_ptr already points at row i_b
                                     }
@@ -194,7 +194,7 @@ pub fn gemm(
                                     unsafe {
                                         // `dot` that son of a B...
                                         let partial =
-                                            dot_no_checks(buf_len, a_row_buf, 1, b_buf, ldb as i32); // <- include stride for col aka, y_buf
+                                            dot_unsafe(buf_len, a_row_buf, 1, b_buf, ldb as i32); // <- include stride for col aka, y_buf
                                         *c_col_ptr.add(r_off) =
                                             alpha.mul_add(partial, *c_col_ptr.add(r_off));
                                     }

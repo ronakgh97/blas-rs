@@ -1,4 +1,4 @@
-use crate::lvl1::copy;
+use crate::lvl1::copy_unsafe;
 use std::arch::x86_64::{__cpuid_count, __m256, _mm256_storeu_ps};
 
 /// Fills an existing buffer with random values in range `[-1.0, 1.0]`
@@ -26,8 +26,8 @@ fn test_gen_fill() {
 /// Performs a horizontal add (reduction) of an `__m256` vector and returns the result as a `f32`
 #[inline(always)]
 pub fn from_m256(v: __m256) -> f32 {
+    let tmp = [0.0f32; 8];
     unsafe {
-        let tmp = [0.0f32; 8];
         _mm256_storeu_ps(tmp.as_ptr() as *mut f32, v);
         tmp.iter().sum()
     }
@@ -47,7 +47,7 @@ pub fn mat_transpose(src: &[f32], dest: &mut [f32], rows: usize, cols: usize) {
             let cmax = (cb + b).min(cols);
 
             for r in rb..rmax {
-                copy(
+                copy_unsafe(
                     cmax - cb,
                     &src[r * cols + cb..],
                     1,

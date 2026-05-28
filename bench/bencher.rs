@@ -3,7 +3,7 @@ mod utils;
 
 use crate::harness::{MetricSet, run_bench};
 use crate::utils::{axpy_ob, dot_ob, gemv_ob};
-use blas_rs::lvl1::{axpy, axpy_no_checks, dot, dot_no_checks};
+use blas_rs::lvl1::{axpy, axpy_unsafe, dot, dot_unsafe};
 use blas_rs::lvl2::gemv;
 use blas_rs::utils::*;
 use std::error::Error;
@@ -191,7 +191,7 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
 
         // Start time bound bench for both
         let rc = run_bench(
-            || unsafe { axpy_no_checks(i, 3.0, &x_buf, 1, &mut y1_buf, 1) },
+            || unsafe { axpy_unsafe(i, 3.0, &x_buf, 1, &mut y1_buf, 1) },
             target_time,
         );
 
@@ -268,7 +268,7 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
 
         let rc = run_bench(
             || unsafe {
-                dot_no_checks(i, &x_buf, 1, &y1_buf, 1);
+                dot_unsafe(i, &x_buf, 1, &y1_buf, 1);
             },
             target_time,
         );
