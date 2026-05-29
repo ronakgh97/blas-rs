@@ -72,7 +72,111 @@ pub fn gemv(
         let y_ptr = y.as_mut_ptr();
 
         // simd path, load columns of A and x, do axpy, store to y; full rizz
-        if incy_isize == 1 {
+        if incx == 1 && incy == 1 {
+            unsafe {
+                let mut j = 0usize;
+                while j + 1 < n {
+                    let alpha_x0 = alpha * *x_ptr.add(j);
+                    let alpha_x1 = alpha * *x_ptr.add(j + 1);
+                    let bx0 = _mm256_set1_ps(alpha_x0);
+                    let bx1 = _mm256_set1_ps(alpha_x1);
+                    let col0 = a_ptr.add(j * lda);
+                    let col1 = a_ptr.add((j + 1) * lda);
+
+                    let mut i = 0usize;
+                    while i + 32 <= m {
+                        // load y write buf
+                        let y0 = _mm256_loadu_ps(y_ptr.add(i));
+                        let y1 = _mm256_loadu_ps(y_ptr.add(i + 8));
+                        let y2 = _mm256_loadu_ps(y_ptr.add(i + 16));
+                        let y3 = _mm256_loadu_ps(y_ptr.add(i + 24));
+
+                        // load two column (64) of A
+                        let a00 = _mm256_loadu_ps(col0.add(i));
+                        let a01 = _mm256_loadu_ps(col0.add(i + 8));
+                        let a02 = _mm256_loadu_ps(col0.add(i + 16));
+                        let a03 = _mm256_loadu_ps(col0.add(i + 24));
+                        let a10 = _mm256_loadu_ps(col1.add(i));
+                        let a11 = _mm256_loadu_ps(col1.add(i + 8));
+                        let a12 = _mm256_loadu_ps(col1.add(i + 16));
+                        let a13 = _mm256_loadu_ps(col1.add(i + 24));
+
+                        let y0 = _mm256_fmadd_ps(bx1, a10, _mm256_fmadd_ps(bx0, a00, y0));
+                        let y1 = _mm256_fmadd_ps(bx1, a11, _mm256_fmadd_ps(bx0, a01, y1));
+                        let y2 = _mm256_fmadd_ps(bx1, a12, _mm256_fmadd_ps(bx0, a02, y2));
+                        let y3 = _mm256_fmadd_ps(bx1, a13, _mm256_fmadd_ps(bx0, a03, y3));
+
+                        // write back
+                        _mm256_storeu_ps(y_ptr.add(i), y0);
+                        _mm256_storeu_ps(y_ptr.add(i + 8), y1);
+                        _mm256_storeu_ps(y_ptr.add(i + 16), y2);
+                        _mm256_storeu_ps(y_ptr.add(i + 24), y3);
+
+                        i += 32;
+                    }
+
+                    while i + 8 <= m {
+                        let y0 = _mm256_loadu_ps(y_ptr.add(i));
+                        let a00 = _mm256_loadu_ps(col0.add(i));
+                        let a10 = _mm256_loadu_ps(col1.add(i));
+                        let y0 = _mm256_fmadd_ps(bx1, a10, _mm256_fmadd_ps(bx0, a00, y0));
+                        _mm256_storeu_ps(y_ptr.add(i), y0);
+                        i += 8;
+                    }
+
+                    while i < m {
+                        let v = alpha_x0.mul_add(*col0.add(i), *y_ptr.add(i));
+                        *y_ptr.add(i) = alpha_x1.mul_add(*col1.add(i), v);
+                        i += 1;
+                    }
+
+                    j += 2;
+                }
+
+                // process 1 col if n is odd
+                if j < n {
+                    let alpha_x = alpha * *x_ptr.add(j);
+                    let bx = _mm256_set1_ps(alpha_x);
+                    let col = a_ptr.add(j * lda);
+
+                    let mut i = 0usize;
+                    while i + 32 <= m {
+                        let a0 = _mm256_loadu_ps(col.add(i));
+                        let a1 = _mm256_loadu_ps(col.add(i + 8));
+                        let a2 = _mm256_loadu_ps(col.add(i + 16));
+                        let a3 = _mm256_loadu_ps(col.add(i + 24));
+
+                        let y0 = _mm256_loadu_ps(y_ptr.add(i));
+                        let y1 = _mm256_loadu_ps(y_ptr.add(i + 8));
+                        let y2 = _mm256_loadu_ps(y_ptr.add(i + 16));
+                        let y3 = _mm256_loadu_ps(y_ptr.add(i + 24));
+
+                        _mm256_storeu_ps(y_ptr.add(i), _mm256_fmadd_ps(bx, a0, y0));
+                        _mm256_storeu_ps(y_ptr.add(i + 8), _mm256_fmadd_ps(bx, a1, y1));
+                        _mm256_storeu_ps(y_ptr.add(i + 16), _mm256_fmadd_ps(bx, a2, y2));
+                        _mm256_storeu_ps(y_ptr.add(i + 24), _mm256_fmadd_ps(bx, a3, y3));
+
+                        i += 32;
+                    }
+
+                    // any leftovers
+                    while i + 8 <= m {
+                        let a0 = _mm256_loadu_ps(col.add(i));
+                        let y0 = _mm256_loadu_ps(y_ptr.add(i));
+                        _mm256_storeu_ps(y_ptr.add(i), _mm256_fmadd_ps(bx, a0, y0));
+                        i += 8;
+                    }
+
+                    // scalar fallback
+                    while i < m {
+                        *y_ptr.add(i) = alpha_x.mul_add(*col.add(i), *y_ptr.add(i));
+                        i += 1;
+                    }
+                }
+            }
+            // if incx!=1 but incy is, we can still do the axpy with simd,
+            // just load x with stride and prefetching, rizz but less rizz
+        } else if incy == 1 {
             unsafe {
                 for j in 0..n {
                     // load x (strided)
@@ -93,6 +197,7 @@ pub fn gemv(
                         let y2 = _mm256_loadu_ps(y_ptr.add(i + 16));
                         let y3 = _mm256_loadu_ps(y_ptr.add(i + 24));
 
+                        // write back
                         _mm256_storeu_ps(y_ptr.add(i), _mm256_fmadd_ps(bx, a0, y0));
                         _mm256_storeu_ps(y_ptr.add(i + 8), _mm256_fmadd_ps(bx, a1, y1));
                         _mm256_storeu_ps(y_ptr.add(i + 16), _mm256_fmadd_ps(bx, a2, y2));
@@ -142,6 +247,7 @@ pub fn gemv(
                 }
             }
         }
+        // in_trans case;
     } else {
         let ix_b = if incx < 0 {
             (1 - m as isize) * incx_isize
@@ -167,9 +273,6 @@ pub fn gemv(
 
                     if j + 1 < n {
                         _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
-                    }
-                    if j + 8 < n {
-                        _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
                     }
 
                     // four accumulators for the dot product,
@@ -200,7 +303,7 @@ pub fn gemv(
                         i += 32;
                     }
 
-                    // left overs
+                    // leftovers
                     while i + 8 <= m {
                         let a0 = _mm256_loadu_ps(col.add(i));
                         let x0 = _mm256_loadu_ps(x_ptr.add(i));
@@ -208,19 +311,25 @@ pub fn gemv(
                         i += 8;
                     }
 
+                    // reduce to scalar
                     let sum01 = _mm256_add_ps(sum0, sum1);
                     let sum23 = _mm256_add_ps(sum2, sum3);
                     let sum = _mm256_add_ps(sum01, sum23);
-                    let mut dot_val = from_m256(sum); // reduce to scalar
+                    let mut dot_val = from_m256(sum);
 
+                    // any remaining
                     while i < m {
                         dot_val += *col.add(i) * *x_ptr.add(i);
                         i += 1;
                     }
 
-                    // get strided y index, update with alpha*dot_val + y
-                    let iy = iy_b + j as isize * incy_isize;
-                    *y_ptr.offset(iy) = alpha.mul_add(dot_val, *y_ptr.offset(iy));
+                    // write back to y with alpha scaling, strided if needed
+                    if incy == 1 {
+                        *y_ptr.add(j) = alpha.mul_add(dot_val, *y_ptr.add(j));
+                    } else {
+                        let iy = iy_b + j as isize * incy_isize;
+                        *y_ptr.offset(iy) = alpha.mul_add(dot_val, *y_ptr.offset(iy));
+                    }
                 }
                 // non-simd path, just do the dot product with prefetching, no rizz
             } else {

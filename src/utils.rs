@@ -26,20 +26,21 @@ fn test_gen_fill() {
     assert!(buf.iter().all(|&x| (-1.0..=1.0).contains(&x)));
 }
 
-/// Performs a horizontal add (reduction) of an `_m256` vector and returns the result as a `f32`
+/// Performs reduction of `_m256` vector and returns the result as a `f32`
 #[inline(always)]
 pub fn from_m256(v: __m256) -> f32 {
     unsafe {
-        // first pass
-        let hi = _mm256_permute2f128_ps(v, v, 1);
-        let sum = _mm256_add_ps(v, hi);
-        let hi = _mm256_permute_ps(sum, 0b01001110);
+        // first pass; [a  b  c  d | e  f  g  h]
+        let hi = _mm256_permute2f128_ps(v, v, 1); // [e  f  g  h | a  b  c  d]
+        let sum = _mm256_add_ps(v, hi); // [a+e  b+f  c+g  d+h | e+a  f+b  g+c  h+d]
+        // [x0 x1 x2 x3] -> [x2 x3 x0 x1]
+        let hi = _mm256_permute_ps(sum, 0b01001110); // [c+g  d+h  a+e  b+f | g+c  h+d  e+a  f+b]
 
-        // second pass
-        let sum = _mm256_add_ps(sum, hi);
-        let hi = _mm256_permute_ps(sum, 0b10110001);
-        let sum = _mm256_add_ps(sum, hi);
-        _mm256_cvtss_f32(sum)
+        // second pass to add the two halves together
+        let sum = _mm256_add_ps(sum, hi); // [a+e+b+f  c+g+d+h  e+a+f+b  g+c+h+d]
+        let hi = _mm256_permute_ps(sum, 0b10110001); // [c+g+d+h  a+e+b+f  g+c+h+d  e+a+f+b]
+        let sum = _mm256_add_ps(sum, hi); // [a+e+b+f+c+g+d+h  a+e+b+f+c+g+d+h  e+a+f+b+g+c+h+d  e+a+f+b+g+c+h+d]
+        _mm256_cvtss_f32(sum) // just extract one
     }
 }
 
