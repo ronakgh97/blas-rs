@@ -58,6 +58,8 @@ pub fn gemv(
     let incx_isize = incx as isize;
     let incy_isize = incy as isize;
 
+    // NOTE; bench insights TODO;
+
     // non-transposed case; axpy each col of A scaled by x[j] into y; prefetch next col of A
     // transposed case; dot product each col of A with x, scale by alpha, add to y[j]; prefetch next col of A
     if !is_trans {
@@ -75,70 +77,100 @@ pub fn gemv(
         if incx == 1 && incy == 1 {
             unsafe {
                 let mut j = 0usize;
-                while j + 1 < n {
+                // 4 col unrolling
+                while j + 3 < n {
                     let alpha_x0 = alpha * *x_ptr.add(j);
                     let alpha_x1 = alpha * *x_ptr.add(j + 1);
-                    let bx0 = _mm256_set1_ps(alpha_x0);
-                    let bx1 = _mm256_set1_ps(alpha_x1);
+                    let alpha_x2 = alpha * *x_ptr.add(j + 2);
+                    let alpha_x3 = alpha * *x_ptr.add(j + 3);
+
+                    // load x alpha's
+                    let ax0 = _mm256_set1_ps(alpha_x0);
+                    let ax1 = _mm256_set1_ps(alpha_x1);
+                    let ax2 = _mm256_set1_ps(alpha_x2);
+                    let ax3 = _mm256_set1_ps(alpha_x3);
+
                     let col0 = a_ptr.add(j * lda);
                     let col1 = a_ptr.add((j + 1) * lda);
+                    let col2 = a_ptr.add((j + 2) * lda);
+                    let col3 = a_ptr.add((j + 3) * lda);
 
                     let mut i = 0usize;
-                    while i + 32 <= m {
-                        // load y write buf
-                        let y0 = _mm256_loadu_ps(y_ptr.add(i));
-                        let y1 = _mm256_loadu_ps(y_ptr.add(i + 8));
-                        let y2 = _mm256_loadu_ps(y_ptr.add(i + 16));
-                        let y3 = _mm256_loadu_ps(y_ptr.add(i + 24));
+                    // process 16 rows (load 2 reg for y and ~8 reg for a's col and store)
+                    while i + 16 <= m {
+                        // load y write buf once
+                        let mut y0 = _mm256_loadu_ps(y_ptr.add(i));
+                        let mut y1 = _mm256_loadu_ps(y_ptr.add(i + 8));
 
-                        // load two column (64) of A
+                        // load 4 col of A and do 4 fmadd for each col;
+                        // i.e. 32 fmadd for 16 rows * 4 col with just 4 loads of x and 16 loads of A, and 2 stores for y;
+                        // we are doing a lot of work with minimal loads/stores, just praying for cpu-chan to schedule well
+
+                        // col 1
                         let a00 = _mm256_loadu_ps(col0.add(i));
                         let a01 = _mm256_loadu_ps(col0.add(i + 8));
-                        let a02 = _mm256_loadu_ps(col0.add(i + 16));
-                        let a03 = _mm256_loadu_ps(col0.add(i + 24));
-                        let a10 = _mm256_loadu_ps(col1.add(i));
-                        let a11 = _mm256_loadu_ps(col1.add(i + 8));
-                        let a12 = _mm256_loadu_ps(col1.add(i + 16));
-                        let a13 = _mm256_loadu_ps(col1.add(i + 24));
+                        y0 = _mm256_fmadd_ps(ax0, a00, y0);
+                        y1 = _mm256_fmadd_ps(ax0, a01, y1);
 
-                        let y0 = _mm256_fmadd_ps(bx1, a10, _mm256_fmadd_ps(bx0, a00, y0));
-                        let y1 = _mm256_fmadd_ps(bx1, a11, _mm256_fmadd_ps(bx0, a01, y1));
-                        let y2 = _mm256_fmadd_ps(bx1, a12, _mm256_fmadd_ps(bx0, a02, y2));
-                        let y3 = _mm256_fmadd_ps(bx1, a13, _mm256_fmadd_ps(bx0, a03, y3));
+                        // col 2
+                        let a02 = _mm256_loadu_ps(col1.add(i));
+                        let a03 = _mm256_loadu_ps(col1.add(i + 8));
+                        y0 = _mm256_fmadd_ps(ax1, a02, y0);
+                        y1 = _mm256_fmadd_ps(ax1, a03, y1);
 
-                        // write back
+                        // col 3
+                        let a10 = _mm256_loadu_ps(col2.add(i));
+                        let a11 = _mm256_loadu_ps(col2.add(i + 8));
+                        y0 = _mm256_fmadd_ps(ax2, a10, y0);
+                        y1 = _mm256_fmadd_ps(ax2, a11, y1);
+
+                        // col 4
+                        let a12 = _mm256_loadu_ps(col3.add(i));
+                        let a13 = _mm256_loadu_ps(col3.add(i + 8));
+                        y0 = _mm256_fmadd_ps(ax3, a12, y0);
+                        y1 = _mm256_fmadd_ps(ax3, a13, y1);
+
+                        // write back once per 4 col
+                        // TODO; store/compute/load all iteration is HEAVY!!!,
+                        //  we can load 4 col and just pray for cpu
                         _mm256_storeu_ps(y_ptr.add(i), y0);
                         _mm256_storeu_ps(y_ptr.add(i + 8), y1);
-                        _mm256_storeu_ps(y_ptr.add(i + 16), y2);
-                        _mm256_storeu_ps(y_ptr.add(i + 24), y3);
 
-                        i += 32;
+                        i += 16;
                     }
 
+                    // squeeze out everything (1 y load per 4 col)
                     while i + 8 <= m {
-                        let y0 = _mm256_loadu_ps(y_ptr.add(i));
-                        let a00 = _mm256_loadu_ps(col0.add(i));
-                        let a10 = _mm256_loadu_ps(col1.add(i));
-                        let y0 = _mm256_fmadd_ps(bx1, a10, _mm256_fmadd_ps(bx0, a00, y0));
+                        let mut y0 = _mm256_loadu_ps(y_ptr.add(i));
+                        y0 = _mm256_fmadd_ps(ax0, _mm256_loadu_ps(col0.add(i)), y0);
+                        y0 = _mm256_fmadd_ps(ax1, _mm256_loadu_ps(col1.add(i)), y0);
+                        y0 = _mm256_fmadd_ps(ax2, _mm256_loadu_ps(col2.add(i)), y0);
+                        y0 = _mm256_fmadd_ps(ax3, _mm256_loadu_ps(col3.add(i)), y0);
                         _mm256_storeu_ps(y_ptr.add(i), y0);
                         i += 8;
                     }
 
+                    // fallback
                     while i < m {
-                        let v = alpha_x0.mul_add(*col0.add(i), *y_ptr.add(i));
-                        *y_ptr.add(i) = alpha_x1.mul_add(*col1.add(i), v);
+                        let mut v = *y_ptr.add(i);
+                        v = alpha_x0.mul_add(*col0.add(i), v);
+                        v = alpha_x1.mul_add(*col1.add(i), v);
+                        v = alpha_x2.mul_add(*col2.add(i), v);
+                        v = alpha_x3.mul_add(*col3.add(i), v);
+                        *y_ptr.add(i) = v;
                         i += 1;
                     }
 
-                    j += 2;
+                    j += 4; // step by 4 col
                 }
 
-                // process 1 col if n is odd
-                if j < n {
+                // process 1 col if n is odd/not divisible by 4
+                while j < n {
                     let alpha_x = alpha * *x_ptr.add(j);
                     let bx = _mm256_set1_ps(alpha_x);
                     let col = a_ptr.add(j * lda);
 
+                    // load 8 reg for A's col and y, do fmadd, store to y;
                     let mut i = 0usize;
                     while i + 32 <= m {
                         let a0 = _mm256_loadu_ps(col.add(i));
@@ -172,6 +204,7 @@ pub fn gemv(
                         *y_ptr.add(i) = alpha_x.mul_add(*col.add(i), *y_ptr.add(i));
                         i += 1;
                     }
+                    j += 1
                 }
             }
             // if incx!=1 but incy is, we can still do the axpy with simd,
@@ -513,6 +546,31 @@ fn gemv_test() {
 
     println!(
         "gemv: {:?} seconds, {:.2} GFLOPS",
+        dur.as_secs_f64(),
+        gflops
+    );
+
+    gen_fill(&mut a);
+    gen_fill(&mut x);
+
+    for _ in 0..warmup_count {
+        y.fill(1.0);
+        gemv(size, size, 5.0, &a, size, &x, 1, 7.0, &mut y, 1, true);
+    }
+
+    y.fill(1.0);
+
+    let start = std::time::Instant::now();
+    for _ in 0..run_count {
+        gemv(size, size, 5.0, &a, size, &x, 1, 7.0, &mut y, 1, true);
+    }
+    let dur = start.elapsed();
+
+    let total_flops = 2.0 * (size.pow(2) as f64) * (run_count as f64);
+    let gflops = total_flops / dur.as_secs_f64() / 1e9;
+
+    println!(
+        "gemv_t: {:?} seconds, {:.2} GFLOPS",
         dur.as_secs_f64(),
         gflops
     );
