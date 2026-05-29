@@ -51,15 +51,15 @@ pub fn mat_transpose(src: &[f32], dest: &mut [f32], rows: usize, cols: usize) {
     assert_eq!(src.len(), rows * cols);
     assert_eq!(dest.len(), rows * cols);
 
-    let b = { (rows / 4).min(cols / 4).clamp(1, 64) };
+    let block = { (rows / 4).min(cols / 4).clamp(1, 64) };
 
-    for rb in (0..rows).step_by(b) {
-        let rmax = (rb + b).min(rows);
+    for rb in (0..rows).step_by(block) {
+        let r_max = (rb + block).min(rows);
 
-        for cb in (0..cols).step_by(b) {
-            let cmax = (cb + b).min(cols);
+        for cb in (0..cols).step_by(block) {
+            let cmax = (cb + block).min(cols);
 
-            for r in rb..rmax {
+            for r in rb..r_max {
                 copy_unsafe(
                     cmax - cb,
                     &src[r * cols + cb..],
@@ -74,8 +74,8 @@ pub fn mat_transpose(src: &[f32], dest: &mut [f32], rows: usize, cols: usize) {
 
 #[test]
 fn test_mat_transpose() {
-    let rows = 999;
-    let cols = 888;
+    let rows = 1024;
+    let cols = 1536;
     let size = rows * cols;
 
     let mut src = vec![0.0f32; size];
@@ -92,7 +92,7 @@ fn test_mat_transpose() {
 }
 
 #[inline]
-/// Returns the cache sizes (L1, L2, L3) in KB for the current CPU using CPUID
+/// Returns the cache sizes (L1, L2, L3) in KB for the current CPU using CPUID `X86`
 pub fn get_cache_size() -> (usize, usize, usize) {
     let mut l1 = 0;
     let mut l2 = 0;

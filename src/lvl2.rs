@@ -96,47 +96,67 @@ pub fn gemv(
                     let col3 = a_ptr.add((j + 3) * lda);
 
                     let mut i = 0usize;
-                    // process 16 rows (load 2 reg for y and ~8 reg for a's col and store)
-                    while i + 16 <= m {
+                    // process 32 rows (load 4 reg for y and ~8 reg for a's col and 4 for store)
+                    while i + 32 <= m {
                         // load y write buf once
                         let mut y0 = _mm256_loadu_ps(y_ptr.add(i));
                         let mut y1 = _mm256_loadu_ps(y_ptr.add(i + 8));
+                        let mut y2 = _mm256_loadu_ps(y_ptr.add(i + 16));
+                        let mut y3 = _mm256_loadu_ps(y_ptr.add(i + 24));
 
                         // load 4 col of A and do 4 fmadd for each col;
-                        // i.e. 32 fmadd for 16 rows * 4 col with just 4 loads of x and 16 loads of A, and 2 stores for y;
+                        // i.e. 128 ops for 32 rows * 4 col with just 4 loads of x and 16 loads of A, and 4 stores for y;
                         // we are doing a lot of work with minimal loads/stores, just praying for cpu-chan to schedule well
 
                         // col 1
-                        let a00 = _mm256_loadu_ps(col0.add(i));
-                        let a01 = _mm256_loadu_ps(col0.add(i + 8));
-                        y0 = _mm256_fmadd_ps(ax0, a00, y0);
-                        y1 = _mm256_fmadd_ps(ax0, a01, y1);
+                        let c10 = _mm256_loadu_ps(col0.add(i));
+                        let c11 = _mm256_loadu_ps(col0.add(i + 8));
+                        let c12 = _mm256_loadu_ps(col0.add(i + 16));
+                        let c13 = _mm256_loadu_ps(col0.add(i + 24));
+                        y0 = _mm256_fmadd_ps(ax0, c10, y0);
+                        y1 = _mm256_fmadd_ps(ax0, c11, y1);
+                        y2 = _mm256_fmadd_ps(ax0, c12, y2);
+                        y3 = _mm256_fmadd_ps(ax0, c13, y3);
 
                         // col 2
-                        let a02 = _mm256_loadu_ps(col1.add(i));
-                        let a03 = _mm256_loadu_ps(col1.add(i + 8));
-                        y0 = _mm256_fmadd_ps(ax1, a02, y0);
-                        y1 = _mm256_fmadd_ps(ax1, a03, y1);
+                        let c20 = _mm256_loadu_ps(col1.add(i));
+                        let c21 = _mm256_loadu_ps(col1.add(i + 8));
+                        let c22 = _mm256_loadu_ps(col1.add(i + 16));
+                        let c23 = _mm256_loadu_ps(col1.add(i + 24));
+                        y0 = _mm256_fmadd_ps(ax1, c20, y0);
+                        y1 = _mm256_fmadd_ps(ax1, c21, y1);
+                        y2 = _mm256_fmadd_ps(ax1, c22, y2);
+                        y3 = _mm256_fmadd_ps(ax1, c23, y3);
 
                         // col 3
-                        let a10 = _mm256_loadu_ps(col2.add(i));
-                        let a11 = _mm256_loadu_ps(col2.add(i + 8));
-                        y0 = _mm256_fmadd_ps(ax2, a10, y0);
-                        y1 = _mm256_fmadd_ps(ax2, a11, y1);
+                        let c30 = _mm256_loadu_ps(col2.add(i));
+                        let c31 = _mm256_loadu_ps(col2.add(i + 8));
+                        let c32 = _mm256_loadu_ps(col2.add(i + 16));
+                        let c33 = _mm256_loadu_ps(col2.add(i + 24));
+                        y0 = _mm256_fmadd_ps(ax2, c30, y0);
+                        y1 = _mm256_fmadd_ps(ax2, c31, y1);
+                        y2 = _mm256_fmadd_ps(ax2, c32, y2);
+                        y3 = _mm256_fmadd_ps(ax2, c33, y3);
 
                         // col 4
-                        let a12 = _mm256_loadu_ps(col3.add(i));
-                        let a13 = _mm256_loadu_ps(col3.add(i + 8));
-                        y0 = _mm256_fmadd_ps(ax3, a12, y0);
-                        y1 = _mm256_fmadd_ps(ax3, a13, y1);
+                        let c40 = _mm256_loadu_ps(col3.add(i));
+                        let c41 = _mm256_loadu_ps(col3.add(i + 8));
+                        let c42 = _mm256_loadu_ps(col3.add(i + 16));
+                        let c43 = _mm256_loadu_ps(col3.add(i + 24));
+                        y0 = _mm256_fmadd_ps(ax3, c40, y0);
+                        y1 = _mm256_fmadd_ps(ax3, c41, y1);
+                        y2 = _mm256_fmadd_ps(ax3, c42, y2);
+                        y3 = _mm256_fmadd_ps(ax3, c43, y3);
 
                         // write back once per 4 col
                         // TODO; store/compute/load all iteration is HEAVY!!!,
                         //  we can load 4 col and just pray for cpu
                         _mm256_storeu_ps(y_ptr.add(i), y0);
                         _mm256_storeu_ps(y_ptr.add(i + 8), y1);
+                        _mm256_storeu_ps(y_ptr.add(i + 16), y2);
+                        _mm256_storeu_ps(y_ptr.add(i + 24), y3);
 
-                        i += 16;
+                        i += 32;
                     }
 
                     // squeeze out everything (1 y load per 4 col)
@@ -208,7 +228,7 @@ pub fn gemv(
                 }
             }
             // if incx!=1 but incy is, we can still do the axpy with simd,
-            // just load x with stride and prefetching, rizz but less rizz
+            // just load x with stride and prefetching, cpu rizz but less rizz
         } else if incy == 1 {
             unsafe {
                 for j in 0..n {
@@ -303,6 +323,7 @@ pub fn gemv(
             if incx == 1 && incy == 1 {
                 let mut j = 0usize;
 
+                // TODO; use 4 col?
                 // process 2 columns to maximize X vector reuse
                 while j + 1 < n {
                     let col0 = a_ptr.add(j * lda);
@@ -515,7 +536,9 @@ fn gemv_test() {
 
     let warmup_count = 32;
     let run_count = 256;
-    let size = 4196;
+    let size = 1024;
+
+    println!("size: {}", size);
 
     let mut a = vec![1.0f32; size * size];
     let mut x = vec![1.0f32; size];
@@ -527,12 +550,16 @@ fn gemv_test() {
 
     gen_fill(&mut a);
     gen_fill(&mut x);
+    y.fill(1.0);
 
     for _ in 0..warmup_count {
         y.fill(1.0);
         gemv(size, size, 5.0, &a, size, &x, 1, 7.0, &mut y, 1, false);
+        gemv(size, size, 5.0, &a, size, &x, 1, 7.0, &mut y, 1, true);
     }
 
+    gen_fill(&mut a);
+    gen_fill(&mut x);
     y.fill(1.0);
 
     let start = std::time::Instant::now();
@@ -552,6 +579,7 @@ fn gemv_test() {
 
     gen_fill(&mut a);
     gen_fill(&mut x);
+    y.fill(1.0);
 
     for _ in 0..warmup_count {
         y.fill(1.0);

@@ -1,10 +1,10 @@
 Rookie attempt to rewriting **BLAS FORTRAN 77 Prototype** Kernels in modern rust. `ONLY x86_64`
 
 > This will not cover all kernels for every single BLAS routine, but the most commonly used ones, (excluding complex
-> type) and I have **spammed** `_mm256_*` intrinsics for all kernels, because I got I7 14650hx which does not support
+> type) and I have **spammed** `_mm256i_*` intrinsics for all kernels, because I got I7 14650hx which does not support
 > AVX-512 :( and lastly, this project is purely for learning source, the code is well written & documented, and I will
-> add .asm snippet [here](asm) for specific kernel & more refs for better understanding about rust compiler, x86, HPC,
-> performance-optimization engineering.
+> add asm snippet [here](asm) for specific kernel & more refs for better understanding about rust compiler, x86, HPC
+> and perf engineering.
 
 refs I took:
 
@@ -36,7 +36,7 @@ run **[bench](./bench/bencher.rs)** using
 - linux: `sudo apt install libopenblas-dev pkg-config` or `sudo pacman -S openblas pkg-config`
 
 > all are single threaded!!! ran on i7 14650hx, rust 1.95.0 -
-> looks like my bench is way too good, since openblas isn't running NATIVE
+> looks like my perf is way too good, since openblas isn't running NATIVE
 
 **axpy**
 ![plot](bench/plot/axpy.png)
