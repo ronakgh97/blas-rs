@@ -142,32 +142,36 @@ fn main() {
         .unwrap_or_else(|| "all".to_string())
         .to_lowercase();
 
-    match kernel.as_str() {
-        "axpy" => {
-            println!("Running AXPY benchmark...");
-            bench_axpy(&size_sample, target_time, plot_path)
-        }
-        "dot" => {
-            println!("Running DOT benchmark...");
-            bench_dot(&size_sample, target_time, plot_path)
-        }
-        "gemv" => {
-            println!("Running GEMV benchmark...");
-            bench_gemv(&size_sample, target_time, plot_path)
-        }
-        "gemv_t" => {
-            println!("Running GEMV Transposed benchmark...");
-            bench_gemv_t(&size_sample, target_time, plot_path)
-        }
-        "all" => {
-            println!("Running all benchmarks...");
-            bench_axpy(&size_sample, target_time, plot_path);
-            bench_dot(&size_sample, target_time, plot_path);
-            bench_gemv(&size_sample, target_time, plot_path);
-            bench_gemv_t(&size_sample, target_time, plot_path);
-        }
-        _ => {
-            eprintln!("Please specify a kernel to bench: axpy, dot, gemv, gemv_t, or all");
+    let kernels: Vec<&str> = if kernel == "all" {
+        vec!["axpy", "dot", "gemv", "gemv_t"] // order
+    } else {
+        kernel.split(',').collect()
+    };
+
+    for k in kernels {
+        match k.trim() {
+            "axpy" => {
+                println!("Running AXPY benchmark...");
+                bench_axpy(&size_sample, target_time, plot_path)
+            }
+            "dot" => {
+                println!("Running DOT benchmark...");
+                bench_dot(&size_sample, target_time, plot_path)
+            }
+            "gemv" => {
+                println!("Running GEMV benchmark...");
+                bench_gemv(&size_sample, target_time, plot_path)
+            }
+            "gemv_t" => {
+                println!("Running GEMV Transposed benchmark...");
+                bench_gemv_t(&size_sample, target_time, plot_path)
+            }
+            _ => {
+                eprintln!(
+                    "Unknown kernel: '{}'. Specify: <kernel1>, <kernel2> or all",
+                    k
+                );
+            }
         }
     }
 }
@@ -215,7 +219,6 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
             working_kb,
         );
 
-        // TODO: this is fine for now, but openblas perf is suspiciously low, wtf?
         let gflops_rel = (gflops - gflops_ob) / gflops_ob * 100.0;
         let latency_rel = (latency - latency_ob) / latency_ob * 100.0;
 

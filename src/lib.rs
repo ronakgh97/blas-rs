@@ -1,9 +1,9 @@
 //! # `blas_rs`
 //!
-//! Experimental BLAS kernels written in Rust for **`x86_64 arch`**.
+//! Experimental BLAS kernels written in Rust for **`x86_64 only`**.
 //!
 //! This crate currently focuses on ALL Level BLAS operations for `f32` only,
-//! with SIMD-heavy implementations (`AVX2 only, so AVX-512 won't benefit`) where applicable.
+//! with SIMD-heavy implementations (`AVX2 only, so having AVX-512 cpu won't benefit`) where applicable.
 //!
 //! ## Modules Structure
 //!
@@ -12,7 +12,7 @@
 //! - [`lvl3`]: implements for matrix-matrix routines.
 //! - [`utils`]: internal helpers used by kernels and tests.
 //!
-//! ## Implemented routines [WIP](https://github.com/ronakgh97/blas_rs)
+//! ## Implemented routines [WIP](https://github.com/ronakgh97/blas_rs) (WIP)
 //!
 //! - lvl1: `axpy`, `scal`, `copy`, `swap`, `dot`, `nrm2`, `asum`, `i_amax`, `rot`, `rotg`.
 //! - lvl2: `gemv`
@@ -28,8 +28,12 @@
 //! let x = vec![1.0, 2.0, 3.0, 4.0];
 //! let mut y = vec![10.0, 20.0, 30.0, 40.0];
 //!
-//! lvl1::axpy(n, alpha, &x, 1, &mut y, 1);
+//! unsafe { lvl1::axpy_unsafe(n, alpha, &x, 1, &mut y, 1) };
 //! assert_eq!(y, vec![12.0, 24.0, 36.0, 48.0]);
+//!
+//! let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+//! let y = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0];
+//! assert_eq!(unsafe { lvl1::dot_unsafe(n, &x, 1, &y, 1) }, 70.0);
 //! ```
 //!
 //! ### Notes

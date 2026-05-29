@@ -7,8 +7,9 @@ use std::arch::x86_64::{
 /// Fills an existing buffer with random values in range `[-1.0, 1.0]`
 #[inline(always)]
 pub fn gen_fill(buf: &mut [f32]) {
-    for x in buf.iter_mut() {
-        *x = fastrand::f32() * 2.0 - 1.0;
+    let mut rng = fastrand::Rng::new();
+    for x in buf {
+        *x = rng.f32_inclusive() * 2.0 - 1.0;
     }
 }
 

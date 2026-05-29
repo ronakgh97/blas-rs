@@ -267,7 +267,122 @@ pub fn gemv(
         // simd path, load columns of A and x, do dot product, store to y;
         // prefetch/pray future columns of A for rizzing cpu-chan
         unsafe {
-            if incx == 1 {
+            if incx == 1 && incy == 1 {
+                let mut j = 0usize;
+
+                // process 2 columns to maximize X vector reuse
+                while j + 1 < n {
+                    let col0 = a_ptr.add(j * lda);
+                    let col1 = a_ptr.add((j + 1) * lda);
+
+                    if j + 2 < n {
+                        _mm_prefetch(a_ptr.add((j + 2) * lda) as *const i8, _MM_HINT_NTA);
+                    }
+
+                    // set 4 acc from each column
+                    let mut sum0_0 = _mm256_setzero_ps();
+                    let mut sum0_1 = _mm256_setzero_ps();
+                    let mut sum0_2 = _mm256_setzero_ps();
+                    let mut sum0_3 = _mm256_setzero_ps();
+
+                    let mut sum1_0 = _mm256_setzero_ps();
+                    let mut sum1_1 = _mm256_setzero_ps();
+                    let mut sum1_2 = _mm256_setzero_ps();
+                    let mut sum1_3 = _mm256_setzero_ps();
+
+                    let mut i = 0usize;
+
+                    while i + 32 <= m {
+                        // load x once (32 floats)
+                        let x0 = _mm256_loadu_ps(x_ptr.add(i));
+                        let x1 = _mm256_loadu_ps(x_ptr.add(i + 8));
+                        let x2 = _mm256_loadu_ps(x_ptr.add(i + 16));
+                        let x3 = _mm256_loadu_ps(x_ptr.add(i + 24));
+
+                        // compute fma for col 0
+                        sum0_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i)), x0, sum0_0);
+                        sum0_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i + 8)), x1, sum0_1);
+                        sum0_2 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i + 16)), x2, sum0_2);
+                        sum0_3 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i + 24)), x3, sum0_3);
+
+                        // compute fma for col 1
+                        sum1_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i)), x0, sum1_0);
+                        sum1_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i + 8)), x1, sum1_1);
+                        sum1_2 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i + 16)), x2, sum1_2);
+                        sum1_3 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i + 24)), x3, sum1_3);
+
+                        i += 32;
+                    }
+
+                    while i + 8 <= m {
+                        let x0 = _mm256_loadu_ps(x_ptr.add(i));
+                        sum0_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i)), x0, sum0_0);
+                        sum1_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i)), x0, sum1_0);
+                        i += 8;
+                    }
+
+                    // combine acc for col 2
+                    let sum0_01 = _mm256_add_ps(sum0_0, sum0_1);
+                    let sum0_23 = _mm256_add_ps(sum0_2, sum0_3);
+                    let mut dot0 = from_m256(_mm256_add_ps(sum0_01, sum0_23));
+
+                    // combine acc for col 1
+                    let sum1_01 = _mm256_add_ps(sum1_0, sum1_1);
+                    let sum1_23 = _mm256_add_ps(sum1_2, sum1_3);
+                    let mut dot1 = from_m256(_mm256_add_ps(sum1_01, sum1_23));
+
+                    // scalar fallback
+                    while i < m {
+                        let x_val = *x_ptr.add(i);
+                        dot0 += *col0.add(i) * x_val;
+                        dot1 += *col1.add(i) * x_val;
+                        i += 1;
+                    }
+
+                    // write back with alpha scaling (contiguous)
+                    *y_ptr.add(j) = alpha.mul_add(dot0, *y_ptr.add(j));
+                    *y_ptr.add(j + 1) = alpha.mul_add(dot1, *y_ptr.add(j + 1));
+
+                    j += 2;
+                }
+
+                // if n is odd, process last column; no reuse but still simd dot product
+                if j < n {
+                    let col = a_ptr.add(j * lda);
+                    let mut sum0 = _mm256_setzero_ps();
+                    let mut sum1 = _mm256_setzero_ps();
+                    let mut i = 0usize;
+
+                    while i + 16 <= m {
+                        sum0 = _mm256_fmadd_ps(
+                            _mm256_loadu_ps(col.add(i)),
+                            _mm256_loadu_ps(x_ptr.add(i)),
+                            sum0,
+                        );
+                        sum1 = _mm256_fmadd_ps(
+                            _mm256_loadu_ps(col.add(i + 8)),
+                            _mm256_loadu_ps(x_ptr.add(i + 8)),
+                            sum1,
+                        );
+                        i += 16;
+                    }
+                    while i + 8 <= m {
+                        sum0 = _mm256_fmadd_ps(
+                            _mm256_loadu_ps(col.add(i)),
+                            _mm256_loadu_ps(x_ptr.add(i)),
+                            sum0,
+                        );
+                        i += 8;
+                    }
+
+                    let mut dot_val = from_m256(_mm256_add_ps(sum0, sum1));
+                    while i < m {
+                        dot_val += *col.add(i) * *x_ptr.add(i);
+                        i += 1;
+                    }
+                    *y_ptr.add(j) = alpha.mul_add(dot_val, *y_ptr.add(j));
+                }
+            } else if incx == 1 {
                 for j in 0..n {
                     let col = a_ptr.add(j * lda);
 

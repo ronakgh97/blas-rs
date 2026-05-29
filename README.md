@@ -20,18 +20,16 @@ refs I took:
 TODO:
 
 - lvl1: rotmg, rotm
-- lvl2: all
-- lvl3: all
+- lvl2: gemv - all
+- lvl3: gemm - all
 - handle NaN, over/underflow, return vs panic and many more edge cases :(
 - test code ref from [this](https://github.com/OpenMathLib/OpenBLAS/tree/develop) repo, currently ai-generated
 - multithreading, GPU maybe?
 - LESS BRANCHING, more SIMD, LESS FN CALLS, better DATA_READ
 - HOLY SHIT TOOOO SLOWWWWWWW KERNELS!!!!!
 
-run [bench](./bench/bencher.rs) using
+run **[bench](./bench/bencher.rs)** using
 `cargo run --bin bencher --release all` [ref](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark)
-
-> NOTE: need openBlas installed in system
 
 - windows: clone [this](https://github.com/microsoft/vcpkg.git), run `.\bootstrap-vcpkg.bat`, then
   `.\vcpkg install openblas:x64-windows` and `setx VCPKG_ROOT=C:\path\to\vcpkg`
