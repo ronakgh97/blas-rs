@@ -1,5 +1,5 @@
 use crate::lvl1::scal;
-use crate::utils::from_m256;
+use crate::utils::reduce_f32;
 use std::arch::x86_64::{
     _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_set1_ps,
     _mm256_setzero_ps, _mm256_storeu_ps,
@@ -734,8 +734,8 @@ pub fn gemm(
                             _mm256_add_ps(sum1_2, sum1_3),
                         );
 
-                        let mut dot0 = from_m256(sum0);
-                        let mut dot1 = from_m256(sum1);
+                        let mut dot0 = reduce_f32(sum0);
+                        let mut dot1 = reduce_f32(sum1);
 
                         // scalar fallback
                         while p < k {
@@ -792,7 +792,7 @@ pub fn gemm(
 
                         let sum01 = _mm256_add_ps(sum0, sum1);
                         let sum23 = _mm256_add_ps(sum2, sum3);
-                        let mut dot0 = from_m256(_mm256_add_ps(sum01, sum23));
+                        let mut dot0 = reduce_f32(_mm256_add_ps(sum01, sum23));
 
                         while p < k {
                             let a_val = *a_col_ptr.add(p);

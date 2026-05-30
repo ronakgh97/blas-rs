@@ -1,4 +1,4 @@
-use crate::utils::from_m256;
+use crate::utils::reduce_f32;
 #[allow(unused_imports)]
 use std::arch::x86_64::{
     __m256i, _CMP_GT_OQ, _CMP_LT_OQ, _MM_HINT_ET0, _MM_HINT_NTA, _MM_HINT_T1, _MM_HINT_T2,
@@ -109,9 +109,36 @@ pub fn axpy(n: usize, alpha: f32, x: &[f32], incx: i32, y: &mut [f32], incy: i32
             0
         };
 
+        // Y += alpha * X
         unsafe {
-            for _ in 0..n {
-                // Y += alpha * X
+            for _ in 0..(n / 4) {
+                // process 4 elements per iter
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
+                ix += incx;
+                iy += incy;
+
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
+                ix += incx;
+                iy += incy;
+
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
+                ix += incx;
+                iy += incy;
+
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
+                ix += incx;
+                iy += incy;
+            }
+
+            for _ in 0..(n % 4) {
                 let x_val = *x_ptr.offset(ix);
                 let y_val = *y_ptr.offset(iy);
                 *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
@@ -201,9 +228,36 @@ pub unsafe fn axpy_unsafe(n: usize, alpha: f32, x: &[f32], incx: i32, y: &mut [f
             0
         };
 
+        // Y += alpha * X
         unsafe {
-            for _ in 0..n {
-                // Y += alpha * X
+            for _ in 0..(n / 4) {
+                // process 4 elements per iter
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
+                ix += incx;
+                iy += incy;
+
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
+                ix += incx;
+                iy += incy;
+
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
+                ix += incx;
+                iy += incy;
+
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
+                ix += incx;
+                iy += incy;
+            }
+
+            for _ in 0..(n % 4) {
                 let x_val = *x_ptr.offset(ix);
                 let y_val = *y_ptr.offset(iy);
                 *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
@@ -287,13 +341,25 @@ pub fn scal(n: usize, alpha: f32, x: &mut [f32], incx: i32) {
                 i += 1;
             }
         } else {
-            // Stride case, we can't use SIMD, just do a simple loop
+            // stride case, we can't use SIMD, just scalar
             let incx = incx as isize;
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
 
-            for _ in 0..n {
+            let mut i = 0;
+            while i + 4 <= n {
+                *x_ptr.offset(ix) *= alpha;
+                *x_ptr.offset(ix + incx) *= alpha;
+                *x_ptr.offset(ix + 2 * incx) *= alpha;
+                *x_ptr.offset(ix + 3 * incx) *= alpha;
+                ix += 4 * incx;
+                i += 4;
+            }
+
+            // fallback
+            while i < n {
                 *x_ptr.offset(ix) *= alpha;
                 ix += incx;
+                i += 1;
             }
         }
     }
@@ -310,10 +376,6 @@ pub unsafe fn scal_unsafe(n: usize, alpha: f32, x: &mut [f32], incx: i32) {
         if incx == 1 {
             if alpha == 0.0 {
                 std::ptr::write_bytes(x_ptr, 0u8, n); // memset to zero
-                // for i in 0..n {
-                //     *x_ptr.add(i) = 0.0  ;
-                // }
-
                 return;
             }
 
@@ -361,13 +423,25 @@ pub unsafe fn scal_unsafe(n: usize, alpha: f32, x: &mut [f32], incx: i32) {
                 i += 1;
             }
         } else {
-            // Stride case, we can't use SIMD, just do a simple loop
+            // stride case, we can't use SIMD, just do a simple loop
             let incx = incx as isize;
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
 
-            for _ in 0..n {
+            let mut i = 0;
+            while i + 4 <= n {
+                *x_ptr.offset(ix) *= alpha;
+                *x_ptr.offset(ix + incx) *= alpha;
+                *x_ptr.offset(ix + 2 * incx) *= alpha;
+                *x_ptr.offset(ix + 3 * incx) *= alpha;
+                ix += 4 * incx;
+                i += 4;
+            }
+
+            // fallback
+            while i < n {
                 *x_ptr.offset(ix) *= alpha;
                 ix += incx;
+                i += 1;
             }
         }
     }
@@ -399,17 +473,40 @@ pub fn copy(n: usize, x: &[f32], incx: i32, y: &mut [f32], incy: i32) {
 
         if incx == 1 && incy == 1 {
             // Contiguous memory allows for a simple bulk copy
-            std::ptr::copy_nonoverlapping(x_ptr, y_ptr, n);
+            copy_nonoverlapping(x_ptr, y_ptr, n);
         } else {
             let incx = incx as isize;
             let incy = incy as isize;
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
             let mut iy = if incy < 0 { (1 - n as isize) * incy } else { 0 };
 
-            for _ in 0..n {
+            let mut i = 0;
+            while i + 4 <= n {
                 *y_ptr.offset(iy) = *x_ptr.offset(ix);
                 ix += incx;
                 iy += incy;
+
+                *y_ptr.offset(iy) = *x_ptr.offset(ix);
+                ix += incx;
+                iy += incy;
+
+                *y_ptr.offset(iy) = *x_ptr.offset(ix);
+                ix += incx;
+                iy += incy;
+
+                *y_ptr.offset(iy) = *x_ptr.offset(ix);
+                ix += incx;
+                iy += incy;
+
+                i += 4;
+            }
+
+            // copy remaining elements
+            while i < n {
+                *y_ptr.offset(iy) = *x_ptr.offset(ix);
+                ix += incx;
+                iy += incy;
+                i += 1;
             }
         }
     }
@@ -433,10 +530,33 @@ pub fn copy_unsafe(n: usize, x: &[f32], incx: i32, y: &mut [f32], incy: i32) {
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
             let mut iy = if incy < 0 { (1 - n as isize) * incy } else { 0 };
 
-            for _ in 0..n {
+            let mut i = 0;
+            while i + 4 <= n {
                 *y_ptr.offset(iy) = *x_ptr.offset(ix);
                 ix += incx;
                 iy += incy;
+
+                *y_ptr.offset(iy) = *x_ptr.offset(ix);
+                ix += incx;
+                iy += incy;
+
+                *y_ptr.offset(iy) = *x_ptr.offset(ix);
+                ix += incx;
+                iy += incy;
+
+                *y_ptr.offset(iy) = *x_ptr.offset(ix);
+                ix += incx;
+                iy += incy;
+
+                i += 4;
+            }
+
+            // copy remaining elements
+            while i < n {
+                *y_ptr.offset(iy) = *x_ptr.offset(ix);
+                ix += incx;
+                iy += incy;
+                i += 1;
             }
         }
     }
@@ -485,12 +605,42 @@ pub fn swap(n: usize, x: &mut [f32], incx: i32, y: &mut [f32], incy: i32) {
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
             let mut iy = if incy < 0 { (1 - n as isize) * incy } else { 0 };
 
-            for _ in 0..n {
+            let mut i = 0;
+            while i + 4 <= n {
+                let tmp0 = *x_ptr.offset(ix);
+                *x_ptr.offset(ix) = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = tmp0;
+                ix += incx;
+                iy += incy;
+
+                let tmp1 = *x_ptr.offset(ix);
+                *x_ptr.offset(ix) = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = tmp1;
+                ix += incx;
+                iy += incy;
+
+                let tmp2 = *x_ptr.offset(ix);
+                *x_ptr.offset(ix) = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = tmp2;
+                ix += incx;
+                iy += incy;
+
+                let tmp3 = *x_ptr.offset(ix);
+                *x_ptr.offset(ix) = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = tmp3;
+                ix += incx;
+                iy += incy;
+
+                i += 4;
+            }
+
+            while i < n {
                 let tmp = *x_ptr.offset(ix);
                 *x_ptr.offset(ix) = *y_ptr.offset(iy);
                 *y_ptr.offset(iy) = tmp;
                 ix += incx;
                 iy += incy;
+                i += 1;
             }
         }
     }
@@ -524,12 +674,42 @@ pub fn swap_unsafe(n: usize, x: &mut [f32], incx: i32, y: &mut [f32], incy: i32)
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
             let mut iy = if incy < 0 { (1 - n as isize) * incy } else { 0 };
 
-            for _ in 0..n {
+            let mut i = 0;
+            while i + 4 <= n {
+                let tmp0 = *x_ptr.offset(ix);
+                *x_ptr.offset(ix) = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = tmp0;
+                ix += incx;
+                iy += incy;
+
+                let tmp1 = *x_ptr.offset(ix);
+                *x_ptr.offset(ix) = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = tmp1;
+                ix += incx;
+                iy += incy;
+
+                let tmp2 = *x_ptr.offset(ix);
+                *x_ptr.offset(ix) = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = tmp2;
+                ix += incx;
+                iy += incy;
+
+                let tmp3 = *x_ptr.offset(ix);
+                *x_ptr.offset(ix) = *y_ptr.offset(iy);
+                *y_ptr.offset(iy) = tmp3;
+                ix += incx;
+                iy += incy;
+
+                i += 4;
+            }
+
+            while i < n {
                 let tmp = *x_ptr.offset(ix);
                 *x_ptr.offset(ix) = *y_ptr.offset(iy);
                 *y_ptr.offset(iy) = tmp;
                 ix += incx;
                 iy += incy;
+                i += 1;
             }
         }
     }
@@ -601,7 +781,7 @@ pub fn dot(n: usize, x: &[f32], incx: i32, y: &[f32], incy: i32) -> f32 {
 
             let sum = _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3));
 
-            let mut result = from_m256(sum);
+            let mut result = reduce_f32(sum);
             while i < n {
                 result += x[i] * y[i];
                 i += 1;
@@ -617,9 +797,11 @@ pub fn dot(n: usize, x: &[f32], incx: i32, y: &[f32], incy: i32) -> f32 {
 
         let mut sum0 = 0.0f32;
         let mut sum1 = 0.0f32;
+        let mut sum2 = 0.0f32;
+        let mut sum3 = 0.0f32;
 
-        // Have two accumulators for `dot` to allow for some instruction-level parallelism
-        for _ in 0..n / 2 {
+        // Have four accumulators to allow for some level of parallelism
+        for _ in 0..(n / 4) {
             unsafe {
                 let x_val = *x_ptr.offset(ix);
                 let y_val = *y_ptr.offset(iy);
@@ -632,19 +814,33 @@ pub fn dot(n: usize, x: &[f32], incx: i32, y: &[f32], incy: i32) -> f32 {
                 sum1 = x_val.mul_add(y_val, sum1);
                 ix += incx;
                 iy += incy;
+
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                sum2 = x_val.mul_add(y_val, sum2);
+                ix += incx;
+                iy += incy;
+
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                sum3 = x_val.mul_add(y_val, sum3);
+                ix += incx;
+                iy += incy;
             }
         }
 
-        // Handle the last element if n is odd
-        if n % 2 == 1 {
+        // Handle remaining elements
+        for _ in 0..(n % 4) {
             unsafe {
                 let x_val = *x_ptr.offset(ix);
                 let y_val = *y_ptr.offset(iy);
                 sum0 = x_val.mul_add(y_val, sum0);
+                ix += incx;
+                iy += incy;
             }
         }
 
-        sum0 + sum1
+        sum0 + sum1 + sum2 + sum3
     }
 }
 
@@ -699,7 +895,7 @@ pub unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy: i32) -
 
             let sum = _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3));
 
-            let mut result = from_m256(sum);
+            let mut result = reduce_f32(sum);
             while i < n {
                 result += x[i] * y[i];
                 i += 1;
@@ -715,9 +911,11 @@ pub unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy: i32) -
 
         let mut sum0 = 0.0f32;
         let mut sum1 = 0.0f32;
+        let mut sum2 = 0.0f32;
+        let mut sum3 = 0.0f32;
 
-        // Have two accumulators for `dot` to allow for some instruction-level parallelism
-        for _ in 0..n / 2 {
+        // Have four accumulators to allow for some level of parallelism
+        for _ in 0..(n / 4) {
             unsafe {
                 let x_val = *x_ptr.offset(ix);
                 let y_val = *y_ptr.offset(iy);
@@ -730,19 +928,33 @@ pub unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy: i32) -
                 sum1 = x_val.mul_add(y_val, sum1);
                 ix += incx;
                 iy += incy;
+
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                sum2 = x_val.mul_add(y_val, sum2);
+                ix += incx;
+                iy += incy;
+
+                let x_val = *x_ptr.offset(ix);
+                let y_val = *y_ptr.offset(iy);
+                sum3 = x_val.mul_add(y_val, sum3);
+                ix += incx;
+                iy += incy;
             }
         }
 
-        // Handle the last element if n is odd
-        if n % 2 == 1 {
+        // Handle remaining elements
+        for _ in 0..(n % 4) {
             unsafe {
                 let x_val = *x_ptr.offset(ix);
                 let y_val = *y_ptr.offset(iy);
                 sum0 = x_val.mul_add(y_val, sum0);
+                ix += incx;
+                iy += incy;
             }
         }
 
-        sum0 + sum1
+        sum0 + sum1 + sum2 + sum3
     }
 }
 
@@ -797,7 +1009,7 @@ pub fn nrm2(n: usize, x: &[f32], incx: i32) -> f32 {
             }
         }
 
-        let mut result = from_m256(sum);
+        let mut result = reduce_f32(sum);
         while i < n {
             result += x[i] * x[i];
             i += 1;
@@ -860,7 +1072,7 @@ pub fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
             }
         }
 
-        let mut result = from_m256(sum);
+        let mut result = reduce_f32(sum);
         while i < n {
             result += x[i] * x[i];
             i += 1;
@@ -948,7 +1160,7 @@ pub fn asum(n: usize, x: &[f32], incx: i32) -> f32 {
         // sum up
         let sum = unsafe { _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3)) };
 
-        let mut result = from_m256(sum); // reduce
+        let mut result = reduce_f32(sum); // reduce
         while i < n {
             result += x[i].abs();
             i += 1;
@@ -1026,7 +1238,7 @@ pub fn asum_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
         // sum up
         let sum = unsafe { _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3)) };
 
-        let mut result = from_m256(sum); // reduce
+        let mut result = reduce_f32(sum); // reduce
         while i < n {
             result += x[i].abs();
             i += 1;

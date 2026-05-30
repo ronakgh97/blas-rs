@@ -1,5 +1,5 @@
 use crate::lvl1::scal;
-use crate::utils::from_m256;
+use crate::utils::reduce_f32;
 use std::arch::x86_64::{
     _MM_HINT_NTA, _mm_prefetch, _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps,
     _mm256_setzero_ps, _mm256_storeu_ps,
@@ -382,12 +382,12 @@ pub fn gemv(
                     // combine acc for col 2
                     let sum0_01 = _mm256_add_ps(sum0_0, sum0_1);
                     let sum0_23 = _mm256_add_ps(sum0_2, sum0_3);
-                    let mut dot0 = from_m256(_mm256_add_ps(sum0_01, sum0_23));
+                    let mut dot0 = reduce_f32(_mm256_add_ps(sum0_01, sum0_23));
 
                     // combine acc for col 1
                     let sum1_01 = _mm256_add_ps(sum1_0, sum1_1);
                     let sum1_23 = _mm256_add_ps(sum1_2, sum1_3);
-                    let mut dot1 = from_m256(_mm256_add_ps(sum1_01, sum1_23));
+                    let mut dot1 = reduce_f32(_mm256_add_ps(sum1_01, sum1_23));
 
                     // scalar fallback
                     while i < m {
@@ -433,7 +433,7 @@ pub fn gemv(
                         i += 8;
                     }
 
-                    let mut dot_val = from_m256(_mm256_add_ps(sum0, sum1));
+                    let mut dot_val = reduce_f32(_mm256_add_ps(sum0, sum1));
                     while i < m {
                         dot_val += *col.add(i) * *x_ptr.add(i);
                         i += 1;
@@ -488,7 +488,7 @@ pub fn gemv(
                     let sum01 = _mm256_add_ps(sum0, sum1);
                     let sum23 = _mm256_add_ps(sum2, sum3);
                     let sum = _mm256_add_ps(sum01, sum23);
-                    let mut dot_val = from_m256(sum);
+                    let mut dot_val = reduce_f32(sum);
 
                     // any remaining
                     while i < m {

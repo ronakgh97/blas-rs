@@ -27,9 +27,9 @@ fn test_gen_fill() {
     assert!(buf.iter().all(|&x| (-1.0..=1.0).contains(&x)));
 }
 
-/// Performs reduction of `_m256` vector and returns the result as a `f32`
+/// Performs reduction of `_m256` vector and returns as a `f32`
 #[inline(always)]
-pub fn from_m256(v: __m256) -> f32 {
+pub fn reduce_f32(v: __m256) -> f32 {
     unsafe {
         // first pass; [a  b  c  d | e  f  g  h]
         let hi = _mm256_permute2f128_ps(v, v, 1); // [e  f  g  h | a  b  c  d]

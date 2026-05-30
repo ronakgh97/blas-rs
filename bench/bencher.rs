@@ -285,7 +285,7 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         let working_kb = 2.0 * i as f64 * size_of::<f32>() as f64 / 1024.0; // x read + y read/write
-        let total_flops = 2.0 * i as f64 * rc; // 2n FLOPs per axpy call
+        let total_flops = 2.0 * i as f64 * rc; // 2n FLOPs per dot call
         let total_flops_ob = 2.0 * i as f64 * rc_ob;
 
         let (gflops, gflops_ob, latency, latency_ob, cache_eff, ns_per_flop) = MetricSet::derive(
