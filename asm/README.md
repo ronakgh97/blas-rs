@@ -6,6 +6,6 @@ this will be used for better insights/optimzation and comparing with my Rust cod
 
 Todo:
 
-- lvl1: axpy, dot, i_amax, asum, rot
+- lvl1: axpy, dot, i_amax, asum, nrm2
 - lvl2: gemv
-- lvl2: none
+- lvl3: none

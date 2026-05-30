@@ -8,6 +8,7 @@ use std::arch::x86_64::{
     _mm256_set_epi32, _mm256_set1_epi32, _mm256_set1_ps, _mm256_setzero_ps, _mm256_setzero_si256,
     _mm256_shuffle_epi32, _mm256_storeu_ps, _mm256_storeu_si256,
 };
+use std::ptr::{copy_nonoverlapping, swap_nonoverlapping};
 // TODO: x[ix], x[ix + incx], x[ix + 2*incx], ..., x[ix + (n-1)*incx]
 // TODO: Need to handle to overflows for f32, using scale^2 * ( (x1/scale)^2 + (x1/scale)^2 + ... )
 // TODO: take raw ptr from unsafe fn
@@ -424,8 +425,8 @@ pub fn copy_unsafe(n: usize, x: &[f32], incx: i32, y: &mut [f32], incy: i32) {
         let y_ptr = y.as_mut_ptr();
 
         if incx == 1 && incy == 1 {
-            // Contiguous memory allows for a simple bulk copy
-            std::ptr::copy_nonoverlapping(x_ptr, y_ptr, n);
+            // contiguous memory allows for a simple bulk copy
+            copy_nonoverlapping(x_ptr, y_ptr, n);
         } else {
             let incx = incx as isize;
             let incy = incy as isize;
@@ -472,7 +473,7 @@ pub fn swap(n: usize, x: &mut [f32], incx: i32, y: &mut [f32], incy: i32) {
 
             if x_addr == y_addr {
             } else if x_addr + byte_len <= y_addr || y_addr + byte_len <= x_addr {
-                std::ptr::swap_nonoverlapping(x_ptr, y_ptr, n);
+                swap_nonoverlapping(x_ptr, y_ptr, n);
             } else {
                 for i in 0..n {
                     std::ptr::swap(x_ptr.add(i), y_ptr.add(i));
@@ -511,7 +512,7 @@ pub fn swap_unsafe(n: usize, x: &mut [f32], incx: i32, y: &mut [f32], incy: i32)
 
             if x_addr == y_addr {
             } else if x_addr + byte_len <= y_addr || y_addr + byte_len <= x_addr {
-                std::ptr::swap_nonoverlapping(x_ptr, y_ptr, n);
+                swap_nonoverlapping(x_ptr, y_ptr, n);
             } else {
                 for i in 0..n {
                     std::ptr::swap(x_ptr.add(i), y_ptr.add(i));

@@ -1,8 +1,8 @@
 use crate::lvl1::scal;
 use crate::utils::from_m256;
 use std::arch::x86_64::{
-    _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps,
-    _mm256_storeu_ps,
+    _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_set1_ps,
+    _mm256_setzero_ps, _mm256_storeu_ps,
 };
 use std::slice::from_raw_parts_mut;
 
@@ -76,7 +76,8 @@ pub fn gemm(
     let c_ptr = c.as_mut_ptr();
 
     match is_trans_a {
-        // C = alpha * A * B + beta * C; C = alpha * A * B^T + beta * C
+        // C = alpha * A * B + beta * C;
+        // C = alpha * A * B^T + beta * C;
         false => unsafe {
             let mut j = 0usize;
             // iter over 4 col at a time
@@ -347,34 +348,313 @@ pub fn gemm(
                 }
             }
         },
-        // C = alpha * A^T * B + beta * C; C = alpha * A^T * B^T + beta * C
+        // C = alpha * A^T * B^T + beta * C;
+        // C = alpha * A^T * B + beta * C;
         true => unsafe {
             if is_trans_b {
-                // TODO; this branch is bottleneck!!!, find a way to vectorized
-                for j in 0..n {
+                let mut b_packed = vec![0.0f32; k * 8];
+                let mut j = 0usize;
+                // process 8 cols of B at a time (8xk block), pack into contiguous for reuse in inner loop
+                while j + 7 < n {
+                    let mut p = 0;
+                    // `gather load` 8 cols of B (strided) and pack into contiguous for reuse in inner loop
+                    while p < k {
+                        _mm256_storeu_ps(
+                            b_packed.as_mut_ptr().add(p * 8),
+                            _mm256_loadu_ps(b_ptr.add(j + p * ldb)),
+                        );
+                        p += 1;
+                    }
+
+                    // 8 col ptrs
                     let c0_ptr = c_ptr.add(j * ldc);
-                    for i in 0..m {
-                        let a_col_ptr = a_ptr.add(i * lda);
-                        let mut sum0 = 0.0f32;
-                        let mut sum1 = 0.0f32;
+                    let c1_ptr = c_ptr.add((j + 1) * ldc);
+                    let c2_ptr = c_ptr.add((j + 2) * ldc);
+                    let c3_ptr = c_ptr.add((j + 3) * ldc);
+                    let c4_ptr = c_ptr.add((j + 4) * ldc);
+                    let c5_ptr = c_ptr.add((j + 5) * ldc);
+                    let c6_ptr = c_ptr.add((j + 6) * ldc);
+                    let c7_ptr = c_ptr.add((j + 7) * ldc);
+
+                    let mut i = 0usize;
+                    // process 4 rows of A at a time (4xk block) to reuse broadcasted A in inner loop
+                    while i + 3 < m {
+                        // 4 col ptrs for current 4 rows
+                        let a_col0 = a_ptr.add(i * lda);
+                        let a_col1 = a_ptr.add((i + 1) * lda);
+                        let a_col2 = a_ptr.add((i + 2) * lda);
+                        let a_col3 = a_ptr.add((i + 3) * lda);
+
+                        // set up acc for each col of C
+                        // acc round 1
+                        let mut c0_0 = _mm256_setzero_ps();
+                        let mut c1_0 = _mm256_setzero_ps();
+                        let mut c2_0 = _mm256_setzero_ps();
+                        let mut c3_0 = _mm256_setzero_ps();
+
+                        // acc round 2
+                        let mut c0_1 = _mm256_setzero_ps();
+                        let mut c1_1 = _mm256_setzero_ps();
+                        let mut c2_1 = _mm256_setzero_ps();
+                        let mut c3_1 = _mm256_setzero_ps();
+
                         let mut p = 0usize;
+                        // inner k dim loop
                         while p + 1 < k {
-                            let b0 = *b_ptr.add(j + p * ldb);
-                            let b1 = *b_ptr.add(j + (p + 1) * ldb);
-                            let a0 = *a_col_ptr.add(p);
-                            let a1 = *a_col_ptr.add(p + 1);
-                            sum0 = a0.mul_add(b0, sum0);
-                            sum1 = a1.mul_add(b1, sum1);
+                            // load two packed_b block of 8 elements (2 cols)
+                            // broadcast two scalars from A, compute 8x2 block of C
+                            let b0 = _mm256_loadu_ps(b_packed.as_ptr().add(p * 8));
+                            let b1 = _mm256_loadu_ps(b_packed.as_ptr().add((p + 1) * 8));
+
+                            // broadcast
+                            let a0 = _mm256_set1_ps(*a_col0.add(p));
+                            let a1 = _mm256_set1_ps(*a_col1.add(p));
+                            let a2 = _mm256_set1_ps(*a_col2.add(p));
+                            let a3 = _mm256_set1_ps(*a_col3.add(p));
+
+                            // fmadd; acc <= (A x B)
+                            c0_0 = _mm256_fmadd_ps(a0, b0, c0_0);
+                            c1_0 = _mm256_fmadd_ps(a1, b0, c1_0);
+                            c2_0 = _mm256_fmadd_ps(a2, b0, c2_0);
+                            c3_0 = _mm256_fmadd_ps(a3, b0, c3_0);
+
+                            // 2nd round
+                            let a0_1 = _mm256_set1_ps(*a_col0.add(p + 1));
+                            let a1_1 = _mm256_set1_ps(*a_col1.add(p + 1));
+                            let a2_1 = _mm256_set1_ps(*a_col2.add(p + 1));
+                            let a3_1 = _mm256_set1_ps(*a_col3.add(p + 1));
+
+                            c0_1 = _mm256_fmadd_ps(a0_1, b1, c0_1);
+                            c1_1 = _mm256_fmadd_ps(a1_1, b1, c1_1);
+                            c2_1 = _mm256_fmadd_ps(a2_1, b1, c2_1);
+                            c3_1 = _mm256_fmadd_ps(a3_1, b1, c3_1);
+
                             p += 2;
                         }
+
+                        // reminder handling for odd k, process 1 col of B
                         if p < k {
-                            let b0 = *b_ptr.add(j + p * ldb);
-                            let a0 = *a_col_ptr.add(p);
-                            sum0 = a0.mul_add(b0, sum0);
+                            let b0 = _mm256_loadu_ps(b_packed.as_ptr().add(p * 8));
+
+                            let a0 = _mm256_set1_ps(*a_col0.add(p));
+                            let a1 = _mm256_set1_ps(*a_col1.add(p));
+                            let a2 = _mm256_set1_ps(*a_col2.add(p));
+                            let a3 = _mm256_set1_ps(*a_col3.add(p));
+
+                            c0_0 = _mm256_fmadd_ps(a0, b0, c0_0);
+                            c1_0 = _mm256_fmadd_ps(a1, b0, c1_0);
+                            c2_0 = _mm256_fmadd_ps(a2, b0, c2_0);
+                            c3_0 = _mm256_fmadd_ps(a3, b0, c3_0);
                         }
-                        let dot0 = sum0 + sum1;
-                        *c0_ptr.add(i) = alpha.mul_add(dot0, *c0_ptr.add(i));
+
+                        // reduce
+                        c0_0 = _mm256_add_ps(c0_0, c0_1);
+                        c1_0 = _mm256_add_ps(c1_0, c1_1);
+                        c2_0 = _mm256_add_ps(c2_0, c2_1);
+                        c3_0 = _mm256_add_ps(c3_0, c3_1);
+
+                        // scale by alpha
+                        let v_alpha = _mm256_set1_ps(alpha);
+                        c0_0 = _mm256_mul_ps(c0_0, v_alpha);
+                        c1_0 = _mm256_mul_ps(c1_0, v_alpha);
+                        c2_0 = _mm256_mul_ps(c2_0, v_alpha);
+                        c3_0 = _mm256_mul_ps(c3_0, v_alpha);
+
+                        // since c is column-major by "choice"
+                        // we do `scatter store`,i.e write to non-contiguous mem from avx reg
+                        let mut tmp = [0.0; 8];
+
+                        // store back to C with scatter pattern
+                        _mm256_storeu_ps(tmp.as_mut_ptr(), c0_0);
+                        *c0_ptr.add(i) += tmp[0];
+                        *c1_ptr.add(i) += tmp[1];
+                        *c2_ptr.add(i) += tmp[2];
+                        *c3_ptr.add(i) += tmp[3];
+                        *c4_ptr.add(i) += tmp[4];
+                        *c5_ptr.add(i) += tmp[5];
+                        *c6_ptr.add(i) += tmp[6];
+                        *c7_ptr.add(i) += tmp[7];
+
+                        // store back to C for next row
+                        _mm256_storeu_ps(tmp.as_mut_ptr(), c1_0);
+                        *c0_ptr.add(i + 1) += tmp[0];
+                        *c1_ptr.add(i + 1) += tmp[1];
+                        *c2_ptr.add(i + 1) += tmp[2];
+                        *c3_ptr.add(i + 1) += tmp[3];
+                        *c4_ptr.add(i + 1) += tmp[4];
+                        *c5_ptr.add(i + 1) += tmp[5];
+                        *c6_ptr.add(i + 1) += tmp[6];
+                        *c7_ptr.add(i + 1) += tmp[7];
+
+                        // next row
+                        _mm256_storeu_ps(tmp.as_mut_ptr(), c2_0);
+                        *c0_ptr.add(i + 2) += tmp[0];
+                        *c1_ptr.add(i + 2) += tmp[1];
+                        *c2_ptr.add(i + 2) += tmp[2];
+                        *c3_ptr.add(i + 2) += tmp[3];
+                        *c4_ptr.add(i + 2) += tmp[4];
+                        *c5_ptr.add(i + 2) += tmp[5];
+                        *c6_ptr.add(i + 2) += tmp[6];
+                        *c7_ptr.add(i + 2) += tmp[7];
+
+                        // next row
+                        _mm256_storeu_ps(tmp.as_mut_ptr(), c3_0);
+                        *c0_ptr.add(i + 3) += tmp[0];
+                        *c1_ptr.add(i + 3) += tmp[1];
+                        *c2_ptr.add(i + 3) += tmp[2];
+                        *c3_ptr.add(i + 3) += tmp[3];
+                        *c4_ptr.add(i + 3) += tmp[4];
+                        *c5_ptr.add(i + 3) += tmp[5];
+                        *c6_ptr.add(i + 3) += tmp[6];
+                        *c7_ptr.add(i + 3) += tmp[7];
+
+                        i += 4;
                     }
+
+                    // process 1 row, if m is odd/not divisible by 4
+                    while i < m {
+                        let a_col0 = a_ptr.add(i * lda);
+
+                        let mut c0_0 = _mm256_setzero_ps();
+                        let mut p = 0usize;
+                        while p + 1 < k {
+                            let b0 = _mm256_loadu_ps(b_packed.as_ptr().add(p * 8));
+                            let b1 = _mm256_loadu_ps(b_packed.as_ptr().add((p + 1) * 8));
+
+                            let a0 = _mm256_set1_ps(*a_col0.add(p));
+                            c0_0 = _mm256_fmadd_ps(a0, b0, c0_0);
+
+                            let a0_1 = _mm256_set1_ps(*a_col0.add(p + 1));
+                            c0_0 = _mm256_fmadd_ps(a0_1, b1, c0_0);
+
+                            p += 2;
+                        }
+
+                        // handle reminders
+                        if p < k {
+                            let b0 = _mm256_loadu_ps(b_packed.as_ptr().add(p * 8));
+                            let a0 = _mm256_set1_ps(*a_col0.add(p));
+                            c0_0 = _mm256_fmadd_ps(a0, b0, c0_0);
+                        }
+
+                        // scale by alpha, write back
+                        let v_alpha = _mm256_set1_ps(alpha);
+                        c0_0 = _mm256_mul_ps(c0_0, v_alpha);
+
+                        // `scatter load`
+                        let mut tmp = [0.0; 8];
+                        _mm256_storeu_ps(tmp.as_mut_ptr(), c0_0);
+                        *c0_ptr.add(i) += tmp[0];
+                        *c1_ptr.add(i) += tmp[1];
+                        *c2_ptr.add(i) += tmp[2];
+                        *c3_ptr.add(i) += tmp[3];
+                        *c4_ptr.add(i) += tmp[4];
+                        *c5_ptr.add(i) += tmp[5];
+                        *c6_ptr.add(i) += tmp[6];
+                        *c7_ptr.add(i) += tmp[7];
+
+                        i += 1;
+                    }
+
+                    j += 8;
+                }
+
+                // final scalar fallback (no simd, no rizz, no cpu)
+                while j < n {
+                    let c0_ptr = c_ptr.add(j * ldc);
+                    let mut i = 0usize;
+
+                    // process remaining col, 4 rows at a time here
+                    while i + 3 < m {
+                        let a_col0 = a_ptr.add(i * lda);
+                        let a_col1 = a_ptr.add((i + 1) * lda);
+                        let a_col2 = a_ptr.add((i + 2) * lda);
+                        let a_col3 = a_ptr.add((i + 3) * lda);
+
+                        // four acc
+                        let mut sum0 = 0.0;
+                        let mut sum1 = 0.0;
+                        let mut sum2 = 0.0;
+                        let mut sum3 = 0.0;
+
+                        let mut p = 0usize;
+                        while p + 3 < k {
+                            let b0 = *b_ptr.add(j + p * ldb);
+                            let b1 = *b_ptr.add(j + (p + 1) * ldb);
+                            let b2 = *b_ptr.add(j + (p + 2) * ldb);
+                            let b3 = *b_ptr.add(j + (p + 3) * ldb);
+
+                            // mul_add 'em
+                            sum0 = (*a_col0.add(p)).mul_add(b0, sum0);
+                            sum1 = (*a_col1.add(p)).mul_add(b0, sum1);
+                            sum2 = (*a_col2.add(p)).mul_add(b0, sum2);
+                            sum3 = (*a_col3.add(p)).mul_add(b0, sum3);
+
+                            sum0 = (*a_col0.add(p + 1)).mul_add(b1, sum0);
+                            sum1 = (*a_col1.add(p + 1)).mul_add(b1, sum1);
+                            sum2 = (*a_col2.add(p + 1)).mul_add(b1, sum2);
+                            sum3 = (*a_col3.add(p + 1)).mul_add(b1, sum3);
+
+                            sum0 = (*a_col0.add(p + 2)).mul_add(b2, sum0);
+                            sum1 = (*a_col1.add(p + 2)).mul_add(b2, sum1);
+                            sum2 = (*a_col2.add(p + 2)).mul_add(b2, sum2);
+                            sum3 = (*a_col3.add(p + 2)).mul_add(b2, sum3);
+
+                            sum0 = (*a_col0.add(p + 3)).mul_add(b3, sum0);
+                            sum1 = (*a_col1.add(p + 3)).mul_add(b3, sum1);
+                            sum2 = (*a_col2.add(p + 3)).mul_add(b3, sum2);
+                            sum3 = (*a_col3.add(p + 3)).mul_add(b3, sum3);
+
+                            p += 4;
+                        }
+
+                        // handle remaining
+                        while p < k {
+                            let b0 = *b_ptr.add(j + p * ldb);
+                            sum0 = (*a_col0.add(p)).mul_add(b0, sum0);
+                            sum1 = (*a_col1.add(p)).mul_add(b0, sum1);
+                            sum2 = (*a_col2.add(p)).mul_add(b0, sum2);
+                            sum3 = (*a_col3.add(p)).mul_add(b0, sum3);
+                            p += 1;
+                        }
+
+                        // scale and write to C
+                        *c0_ptr.add(i) += alpha * sum0;
+                        *c0_ptr.add(i + 1) += alpha * sum1;
+                        *c0_ptr.add(i + 2) += alpha * sum2;
+                        *c0_ptr.add(i + 3) += alpha * sum3;
+
+                        i += 4;
+                    }
+
+                    // last final fallback, m < 4, n < 8
+                    while i < m {
+                        let a_col0 = a_ptr.add(i * lda);
+                        let mut sum0 = 0.0;
+                        let mut p = 0usize;
+                        // unroll 4 for a_col0 and b, accumulate into sum0 for one element in C
+                        while p + 3 < k {
+                            let b0 = *b_ptr.add(j + p * ldb);
+                            let b1 = *b_ptr.add(j + (p + 1) * ldb);
+                            let b2 = *b_ptr.add(j + (p + 2) * ldb);
+                            let b3 = *b_ptr.add(j + (p + 3) * ldb);
+                            sum0 = (*a_col0.add(p)).mul_add(b0, sum0);
+                            sum0 = (*a_col0.add(p + 1)).mul_add(b1, sum0);
+                            sum0 = (*a_col0.add(p + 2)).mul_add(b2, sum0);
+                            sum0 = (*a_col0.add(p + 3)).mul_add(b3, sum0);
+                            p += 4;
+                        }
+                        // remaining
+                        while p < k {
+                            let b0 = *b_ptr.add(j + p * ldb);
+                            sum0 = (*a_col0.add(p)).mul_add(b0, sum0);
+                            p += 1;
+                        }
+                        *c0_ptr.add(i) += alpha * sum0;
+                        i += 1;
+                    }
+
+                    j += 1;
                 }
             } else {
                 let mut j = 0usize;

@@ -95,6 +95,10 @@ pub fn gemv(
                     let col2 = a_ptr.add((j + 2) * lda);
                     let col3 = a_ptr.add((j + 3) * lda);
 
+                    if j + 4 < n {
+                        _mm_prefetch(a_ptr.add((j + 4) * lda) as *const i8, _MM_HINT_NTA);
+                    }
+
                     let mut i = 0usize;
                     // process 32 rows (load 4 reg for y and ~8 reg for a's col and 4 for store)
                     while i + 32 <= m {
@@ -533,9 +537,10 @@ pub fn gemv(
 fn gemv_test() {
     use crate::utils::gen_fill;
     use std::hint::black_box;
+    use std::time::Instant;
 
-    let warmup_count = 32;
-    let run_count = 256;
+    let warmup_count = 64;
+    let run_count = 368;
     let size = 1024;
 
     println!("size: {}", size);
@@ -562,7 +567,7 @@ fn gemv_test() {
     gen_fill(&mut x);
     y.fill(1.0);
 
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     for _ in 0..run_count {
         gemv(size, size, 5.0, &a, size, &x, 1, 7.0, &mut y, 1, false);
     }
@@ -588,7 +593,7 @@ fn gemv_test() {
 
     y.fill(1.0);
 
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     for _ in 0..run_count {
         gemv(size, size, 5.0, &a, size, &x, 1, 7.0, &mut y, 1, true);
     }
