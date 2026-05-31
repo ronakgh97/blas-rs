@@ -1,3 +1,3 @@
 fn main() {
-    todo!("SAD right now...");
+    println!("Hello ASM!");
 }

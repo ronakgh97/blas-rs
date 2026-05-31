@@ -29,13 +29,13 @@ TODO:
 - HOLY SHIT TOOOO SLOWWWWWWW KERNELS!!!!!
 
 run **[bench](./bench/bencher.rs)** using
-`cargo run --bin bencher --release all` [ref](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark)
+`cargo bench --bench bencher all` [ref](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark)
 
 - windows: clone [this](https://github.com/microsoft/vcpkg.git), run `.\bootstrap-vcpkg.bat`, then
   `.\vcpkg install openblas:x64-windows` and `setx VCPKG_ROOT=C:\path\to\vcpkg`
 - linux: `sudo apt install libopenblas-dev pkg-config` or `sudo pacman -S openblas pkg-config`
 
-> all are single threaded!!! ran on i7 14650hx, rust 1.95.0 -
+> all are single threaded!!! ran on i7 14650hx, rust 1.96.0 -
 > looks like my perf is way too good, since openblas isn't running NATIVE
 
 **axpy**

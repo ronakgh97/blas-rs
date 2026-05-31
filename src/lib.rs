@@ -1,6 +1,6 @@
-//! # `blas_rs`
+//! # `blas-rs`
 //!
-//! Experimental BLAS kernels written in Rust for **`x86_64 only`**.
+//! Experimental BLAS kernels written in Rust for **`x86_64`**.
 //!
 //! This crate currently focuses on ALL Level BLAS operations for `f32` only,
 //! with SIMD-heavy implementations (`AVX2 only, so having AVX-512 cpu won't benefit`) where applicable.
@@ -50,6 +50,7 @@
 //!
 //! ### Benchmarks [gitHub](https://github.com/ronakgh97/blas_rs)
 //!
+
 pub mod lvl1;
 pub mod lvl2;
 pub mod lvl3;
