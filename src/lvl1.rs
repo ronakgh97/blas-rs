@@ -1021,13 +1021,34 @@ pub fn nrm2(n: usize, x: &[f32], incx: i32) -> f32 {
         let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
         let mut sum: f32 = 0.0;
         let x_ptr = x.as_ptr();
-        for _ in 0..n {
+
+        let mut i = 0usize;
+        while i + 4 <= n {
+            unsafe {
+                let x0 = *x_ptr.offset(ix);
+                let x1 = *x_ptr.offset(ix + incx);
+                let x2 = *x_ptr.offset(ix + 2 * incx);
+                let x3 = *x_ptr.offset(ix + 3 * incx);
+
+                sum = x0.mul_add(x0, sum);
+                sum = x1.mul_add(x1, sum);
+                sum = x2.mul_add(x2, sum);
+                sum = x3.mul_add(x3, sum);
+
+                ix += 4 * incx;
+            }
+            i += 4;
+        }
+
+        while i < n {
             unsafe {
                 let x_val = *x_ptr.offset(ix);
                 sum = x_val.mul_add(x_val, sum);
                 ix += incx;
             }
+            i += 1;
         }
+
         sum.sqrt()
     }
 }
@@ -1084,13 +1105,34 @@ pub fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
         let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
         let mut sum: f32 = 0.0;
         let x_ptr = x.as_ptr();
-        for _ in 0..n {
+
+        let mut i = 0usize;
+        while i + 4 <= n {
+            unsafe {
+                let x0 = *x_ptr.offset(ix);
+                let x1 = *x_ptr.offset(ix + incx);
+                let x2 = *x_ptr.offset(ix + 2 * incx);
+                let x3 = *x_ptr.offset(ix + 3 * incx);
+
+                sum = x0.mul_add(x0, sum);
+                sum = x1.mul_add(x1, sum);
+                sum = x2.mul_add(x2, sum);
+                sum = x3.mul_add(x3, sum);
+
+                ix += 4 * incx;
+            }
+            i += 4;
+        }
+
+        while i < n {
             unsafe {
                 let x_val = *x_ptr.offset(ix);
                 sum = x_val.mul_add(x_val, sum);
                 ix += incx;
             }
+            i += 1;
         }
+
         sum.sqrt()
     }
 }
@@ -1169,17 +1211,33 @@ pub fn asum(n: usize, x: &[f32], incx: i32) -> f32 {
     } else {
         let incx = incx as isize;
         let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
-
         let x_ptr = x.as_ptr();
-
         let mut sum = 0.0f32;
 
-        for _ in 0..n {
+        let mut i = 0usize;
+        while i + 4 <= n {
+            unsafe {
+                let v0 = *x_ptr.offset(ix);
+                let v1 = *x_ptr.offset(ix + incx);
+                let v2 = *x_ptr.offset(ix + 2 * incx);
+                let v3 = *x_ptr.offset(ix + 3 * incx);
+                sum += v0.abs();
+                sum += v1.abs();
+                sum += v2.abs();
+                sum += v3.abs();
+                ix += 4 * incx;
+            }
+            i += 4;
+        }
+
+        while i < n {
             unsafe {
                 sum += (*x_ptr.offset(ix)).abs();
                 ix += incx;
             }
+            i += 1;
         }
+
         sum
     }
 }
@@ -1247,17 +1305,33 @@ pub fn asum_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
     } else {
         let incx = incx as isize;
         let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
-
         let x_ptr = x.as_ptr();
-
         let mut sum = 0.0f32;
 
-        for _ in 0..n {
+        let mut i = 0usize;
+        while i + 4 <= n {
+            unsafe {
+                let v0 = *x_ptr.offset(ix);
+                let v1 = *x_ptr.offset(ix + incx);
+                let v2 = *x_ptr.offset(ix + 2 * incx);
+                let v3 = *x_ptr.offset(ix + 3 * incx);
+                sum += v0.abs();
+                sum += v1.abs();
+                sum += v2.abs();
+                sum += v3.abs();
+                ix += 4 * incx;
+            }
+            i += 4;
+        }
+
+        while i < n {
             unsafe {
                 sum += (*x_ptr.offset(ix)).abs();
                 ix += incx;
             }
+            i += 1;
         }
+
         sum
     }
 }

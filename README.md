@@ -28,15 +28,17 @@ TODO:
 - LESS BRANCHING, more SIMD, LESS FN CALLS, better DATA_READ
 - HOLY SHIT TOOOO SLOWWWWWWW KERNELS!!!!!
 
-run **[bench](./bench/bencher.rs)** using
-`cargo bench --bench bencher all` [ref](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark)
+Bench? run **[harness](./bench/bencher.rs)** using
+`cargo bench --bench bencher all` [ref](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark) and compile
+using x86-64-v3 target-cpu, otherwise rustc will throw tantrum.
 
-- windows: clone [this](https://github.com/microsoft/vcpkg.git), run `.\bootstrap-vcpkg.bat`, then
-  `.\vcpkg install openblas:x64-windows` and `setx VCPKG_ROOT=C:\path\to\vcpkg`
+install openblas "somehow"
+
+- windows: clone [vcpkg](https://github.com/microsoft/vcpkg.git), run `.\bootstrap-vcpkg.bat`, then
+  `.\vcpkg install openblas:x64-windows` and `setx VCPKG_ROOT=C:\path\to\vcpkg for env`
 - linux: `sudo apt install libopenblas-dev pkg-config` or `sudo pacman -S openblas pkg-config`
 
-> all are single threaded!!! ran on i7 14650hx, rust 1.96.0 -
-> looks like my perf is way too good, since openblas isn't running NATIVE
+> all are single threaded!!! ran on i7 14650hx, rust 1.96.0 - openblas isn't running NATIVE btw.
 
 **axpy**
 ![plot](bench/plot/axpy.png)

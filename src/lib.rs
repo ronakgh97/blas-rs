@@ -48,8 +48,16 @@
 //! - [Intel doc](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/blas-routines.html)
 //! - [intrinsics guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html)
 //!
-//! ### Benchmarks [gitHub](https://github.com/ronakgh97/blas_rs)
+//! ### Checkout benchmarks: [gitHub](https://github.com/ronakgh97/blas_rs)
 //!
+
+#[cfg(not(target_arch = "x86_64"))]
+compile_error!("blas_rs is strictly supported on x86_64 architectures");
+
+#[cfg(any(not(target_feature = "avx2"), not(target_feature = "fma")))]
+compile_error!(
+    "blas_rs requires some x86-64-v3 CPU capable features. Try compiling with `-C target-cpu=x86-64-v3`"
+);
 
 pub mod lvl1;
 pub mod lvl2;
