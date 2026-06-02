@@ -810,7 +810,7 @@ pub fn gemm(
 
 #[test]
 fn gemm_test() {
-    use crate::utils::gen_fill;
+    use crate::utils::Noise;
     use std::hint::black_box;
     use std::time::Instant;
 
@@ -820,6 +820,7 @@ fn gemm_test() {
 
     println!("size: {}", size);
 
+    let mut noise = Noise::init();
     let mut a = vec![0.0f32; size * size];
     let mut b = vec![0.0f32; size * size];
     let mut c = vec![0.0f32; size * size];
@@ -828,8 +829,8 @@ fn gemm_test() {
     black_box(&mut b);
     black_box(&mut c);
 
-    gen_fill(&mut a);
-    gen_fill(&mut b);
+    noise.fill_f32(&mut a);
+    noise.fill_f32(&mut b);
     c.fill(1.0);
 
     for _ in 0..warmup {
@@ -848,8 +849,8 @@ fn gemm_test() {
         );
     }
 
-    gen_fill(&mut a);
-    gen_fill(&mut b);
+    noise.fill_f32(&mut a);
+    noise.fill_f32(&mut b);
     c.fill(1.0);
 
     let start = Instant::now();
@@ -869,8 +870,8 @@ fn gemm_test() {
         gflops
     );
 
-    gen_fill(&mut a);
-    gen_fill(&mut b);
+    noise.fill_f32(&mut a);
+    noise.fill_f32(&mut b);
     c.fill(1.0);
 
     let start = Instant::now();
@@ -890,8 +891,8 @@ fn gemm_test() {
         gflops
     );
 
-    gen_fill(&mut a);
-    gen_fill(&mut b);
+    noise.fill_f32(&mut a);
+    noise.fill_f32(&mut b);
     c.fill(1.0);
 
     let start = Instant::now();
@@ -911,8 +912,8 @@ fn gemm_test() {
         gflops
     );
 
-    gen_fill(&mut a);
-    gen_fill(&mut b);
+    noise.fill_f32(&mut a);
+    noise.fill_f32(&mut b);
     c.fill(1.0);
 
     let start = Instant::now();

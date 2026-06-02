@@ -535,7 +535,7 @@ pub fn gemv(
 
 #[test]
 fn gemv_test() {
-    use crate::utils::gen_fill;
+    use crate::utils::Noise;
     use std::hint::black_box;
     use std::time::Instant;
 
@@ -545,6 +545,7 @@ fn gemv_test() {
 
     println!("size: {}", size);
 
+    let mut noise = Noise::init();
     let mut a = vec![1.0f32; size * size];
     let mut x = vec![1.0f32; size];
     let mut y = vec![0.0f32; size];
@@ -553,8 +554,8 @@ fn gemv_test() {
     black_box(&mut x);
     black_box(&mut y);
 
-    gen_fill(&mut a);
-    gen_fill(&mut x);
+    noise.fill_f32(&mut a);
+    noise.fill_f32(&mut x);
     y.fill(1.0);
 
     for _ in 0..warmup_count {
@@ -563,8 +564,8 @@ fn gemv_test() {
         gemv(size, size, 5.0, &a, size, &x, 1, 7.0, &mut y, 1, true);
     }
 
-    gen_fill(&mut a);
-    gen_fill(&mut x);
+    noise.fill_f32(&mut a);
+    noise.fill_f32(&mut x);
     y.fill(1.0);
 
     let start = Instant::now();
@@ -582,8 +583,8 @@ fn gemv_test() {
         gflops
     );
 
-    gen_fill(&mut a);
-    gen_fill(&mut x);
+    noise.fill_f32(&mut a);
+    noise.fill_f32(&mut x);
     y.fill(1.0);
 
     for _ in 0..warmup_count {

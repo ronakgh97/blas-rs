@@ -1,7 +1,7 @@
 [alias]
 br = "build --all-targets --release"
 tp = "nextest run --all-targets --no-fail-fast --release --test-threads 18"
-tc = "nextest run --all-targets --no-capture --no-fail-fast --release"
+ts = "nextest run --all-targets --no-capture --no-fail-fast --release"
 
 [build]
 rustflags = ["-C", "target-cpu=x86-64-v3"]

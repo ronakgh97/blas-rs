@@ -1,23 +1,61 @@
 use crate::lvl1::copy_unsafe;
+use rand::distr::uniform::SampleUniform;
+use rand::{RngExt, SeedableRng};
+use rand_xoshiro::Xoroshiro128PlusPlus;
+use rand_xoshiro::rand_core::Rng;
 use std::arch::x86_64::{
     __cpuid_count, __m256, _mm256_add_ps, _mm256_cvtss_f32, _mm256_permute_ps,
     _mm256_permute2f128_ps,
 };
 
-/// Fills an existing buffer with random values in range `[-1.0, 1.0]`
-#[inline(always)]
-pub fn gen_fill(buf: &mut [f32]) {
-    let mut rng = fastrand::Rng::new();
-    for x in buf {
-        *x = rng.f32_inclusive() * 2.0 - 1.0;
+/// A simple random noise generator using the `Xoroshiro128PlusPlus` algorithm from the `rand_xoshiro` crate.
+#[derive(Clone)]
+pub struct Noise {
+    rng: Xoroshiro128PlusPlus,
+}
+
+impl Noise {
+    /// Initializes the noise generator with a random seed from the OS RNG
+    pub fn init() -> Self {
+        Self {
+            rng: Xoroshiro128PlusPlus::from_rng(&mut rand::rng()),
+        }
+    }
+
+    /// Generates a random number of type `T` in the inclusive range `[min, max]`
+    #[inline(always)]
+    pub fn rand_range<T: std::cmp::PartialOrd + SampleUniform>(&mut self, min: T, max: T) -> T {
+        self.rng.random_range(min..=max)
+    }
+
+    /// Fills a buffer with random `f32` values in the range `[-1.0, 1.0]`
+    #[inline(always)]
+    pub fn fill_f32(&mut self, buf: &mut [f32]) {
+        for x in buf {
+            *x = self.rng.random_range(-1.0..=1.0)
+        }
+    }
+
+    /// Fills a buffer with random `i32` values `[-1, 0, 1]`
+    #[inline(always)]
+    pub fn fill_i32(&mut self, buf: &mut [i32]) {
+        for x in buf {
+            *x = self.rng.random_range(-1i32..=1i32);
+        }
+    }
+    /// Fills a buffer with random bytes
+    #[inline(always)]
+    pub fn fill_bytes(&mut self, buf: &mut [u8]) {
+        self.rng.fill_bytes(buf);
     }
 }
 
 #[test]
-fn test_gen_fill() {
+fn test_f32_fill() {
+    let mut noise = Noise::init();
     let mut buf = vec![0.0f32; 999_999_999];
     let strt = std::time::Instant::now();
-    gen_fill(&mut buf);
+    noise.fill_f32(&mut buf);
     let elp = strt.elapsed();
     println!(
         "Generated {} random numbers in {:?} seconds",
@@ -78,8 +116,9 @@ fn test_mat_transpose() {
     let cols = 1536;
     let size = rows * cols;
 
+    let mut noise = Noise::init();
     let mut src = vec![0.0f32; size];
-    gen_fill(&mut src);
+    noise.fill_f32(&mut src);
     let mut dest = vec![0.0f32; size];
 
     mat_transpose(&src, &mut dest, rows, cols);

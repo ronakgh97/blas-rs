@@ -29,7 +29,8 @@ codegen-units = 1
 lto = "fat"
 
 [dependencies]
-fastrand = "2.4.1" # utils for random generation
+rand = "0.10.1"
+rand_xoshiro = "0.8.1" # apparently faster than my impl of splitmix64 :(
 # rayon = "1.12.0" # for cpu parallel computations
 
 [dev-dependencies]

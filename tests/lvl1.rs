@@ -1,5 +1,5 @@
 use blas_rs::lvl1::*;
-use blas_rs::utils::gen_fill;
+use blas_rs::utils::Noise;
 
 #[test]
 fn test_axpy() {
@@ -37,8 +37,9 @@ fn test_axpy() {
     let mut gen_x = vec![0.0f32; 8192];
     let mut gen_y = vec![0.0f32; 8192];
 
-    gen_fill(&mut gen_x);
-    gen_fill(&mut gen_y);
+    let mut noise = Noise::init();
+    noise.fill_f32(&mut gen_x);
+    noise.fill_f32(&mut gen_y);
 
     let r = 1024;
 
@@ -244,8 +245,10 @@ fn test_dot() {
     let mut gen_x = vec![0.0f32; 8192];
     let mut gen_y = vec![0.0f32; 8192];
 
-    gen_fill(&mut gen_x);
-    gen_fill(&mut gen_y);
+    let mut noise = Noise::init();
+
+    noise.fill_f32(&mut gen_x);
+    noise.fill_f32(&mut gen_y);
 
     let r = 1024;
 

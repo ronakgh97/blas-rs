@@ -18,6 +18,7 @@ extern crate openblas_src;
 // Bench uses this as ref: https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark as ref
 
 fn warmup(r: usize, s: usize) {
+    let mut noise = Noise::init();
     let mut a = vec![0.0f32; s * s];
     let mut x = vec![0.0f32; s];
     let mut y = vec![0.0f32; s];
@@ -26,8 +27,8 @@ fn warmup(r: usize, s: usize) {
     black_box(&mut x);
     black_box(&mut y);
 
-    gen_fill(&mut a);
-    gen_fill(&mut x);
+    noise.fill_f32(&mut a);
+    noise.fill_f32(&mut x);
     y.fill(1.0);
 
     // Warmup phase
@@ -65,8 +66,8 @@ fn warmup(r: usize, s: usize) {
             dot(s, &y, 1, &vec![0.0f32; s], 1);
         }
 
-        gen_fill(&mut a);
-        gen_fill(&mut x);
+        noise.fill_f32(&mut a);
+        noise.fill_f32(&mut x);
         y.fill(1.0);
 
         {
@@ -103,8 +104,8 @@ fn warmup(r: usize, s: usize) {
             dot_ob(s as i32, &y, 1, &vec![0.0f32; s], 1);
         }
 
-        gen_fill(&mut a);
-        gen_fill(&mut x);
+        noise.fill_f32(&mut a);
+        noise.fill_f32(&mut x);
         y.fill(1.0);
     }
 }
@@ -177,8 +178,8 @@ fn main() {
 }
 
 fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
+    let mut noise = Noise::init();
     let mut bench_metrics: Vec<BenchMetrics> = Vec::new();
-
     let mut metrics_collector = MetricSet::new();
 
     for &i in size_sample {
@@ -190,7 +191,7 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         black_box(&mut y1_buf);
         black_box(&mut y1_buf);
 
-        gen_fill(&mut x_buf);
+        noise.fill_f32(&mut x_buf);
         y1_buf.fill(1.0);
 
         // Start time bound bench for both
@@ -237,7 +238,7 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         // reset, avoid hot cache possibility, we don't do TRUST ME BRO BENCH
-        gen_fill(&mut x_buf);
+        noise.fill_f32(&mut x_buf);
         y1_buf.fill(1.0);
         y2_buf.fill(1.0);
     }
@@ -252,8 +253,8 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
 }
 
 fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
+    let mut noise = Noise::init();
     let mut metrics: Vec<BenchMetrics> = Vec::new();
-
     let mut metrics_collector = MetricSet::new();
 
     for &i in size_sample {
@@ -261,7 +262,7 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         let mut y1_buf = vec![0.0f32; i];
         let mut y2_buf = vec![0.0f32; i];
 
-        gen_fill(&mut x_buf);
+        noise.fill_f32(&mut x_buf);
         black_box(&mut y1_buf);
         black_box(&mut y2_buf);
 
@@ -315,9 +316,9 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         // reset, avoid hot cache possibility, we don't do 'TRUST ME BRO' BENCH
-        gen_fill(&mut x_buf);
-        gen_fill(&mut y1_buf);
-        gen_fill(&mut y2_buf);
+        noise.fill_f32(&mut x_buf);
+        noise.fill_f32(&mut y1_buf);
+        noise.fill_f32(&mut y2_buf);
     }
 
     metrics_collector.finalize(&mut metrics);
@@ -331,8 +332,8 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
 }
 
 fn bench_gemv(size_sample: &[usize], target_time: f64, plot_path: &Path) {
+    let mut noise = Noise::init();
     let mut metrics: Vec<BenchMetrics> = Vec::new();
-
     let mut metrics_collector = MetricSet::new();
 
     for &i in size_sample {
@@ -346,8 +347,8 @@ fn bench_gemv(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         black_box(&mut y1_buf);
         black_box(&mut y2_buf);
 
-        gen_fill(&mut a_buf);
-        gen_fill(&mut x_buf);
+        noise.fill_f32(&mut a_buf);
+        noise.fill_f32(&mut x_buf);
 
         y1_buf.fill(1.0);
 
@@ -424,8 +425,8 @@ fn bench_gemv(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         // reset, avoid hot cache possibility
-        gen_fill(&mut a_buf);
-        gen_fill(&mut x_buf);
+        noise.fill_f32(&mut a_buf);
+        noise.fill_f32(&mut x_buf);
         y1_buf.fill(1.0);
         y2_buf.fill(1.0);
     }
@@ -441,8 +442,8 @@ fn bench_gemv(size_sample: &[usize], target_time: f64, plot_path: &Path) {
 }
 
 fn bench_gemv_t(size_sample: &[usize], target_time: f64, plot_path: &Path) {
+    let mut noise = Noise::init();
     let mut metrics: Vec<BenchMetrics> = Vec::new();
-
     let mut metrics_collector = MetricSet::new();
 
     for &i in size_sample {
@@ -456,8 +457,8 @@ fn bench_gemv_t(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         black_box(&mut y1_buf);
         black_box(&mut y2_buf);
 
-        gen_fill(&mut a_buf);
-        gen_fill(&mut x_buf);
+        noise.fill_f32(&mut a_buf);
+        noise.fill_f32(&mut x_buf);
 
         y1_buf.fill(1.0);
 
@@ -533,8 +534,8 @@ fn bench_gemv_t(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         // reset, avoid hot cache possibility
-        gen_fill(&mut a_buf);
-        gen_fill(&mut x_buf);
+        noise.fill_f32(&mut a_buf);
+        noise.fill_f32(&mut x_buf);
         y1_buf.fill(1.0);
         y2_buf.fill(1.0);
     }
