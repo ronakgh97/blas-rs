@@ -59,16 +59,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "blas-sys"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b49cc48acc7ead5c33d2e3cac9c47e55bfd04c929abd1456459084a8c8cdf2cb"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "blas_rs"
+name = "blas-rs"
 version = "1.0.0-alpha.3"
 dependencies = [
  "blas",
@@ -76,6 +67,15 @@ dependencies = [
  "plotters",
  "rand",
  "rand_xoshiro",
+]
+
+[[package]]
+name = "blas-sys"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b49cc48acc7ead5c33d2e3cac9c47e55bfd04c929abd1456459084a8c8cdf2cb"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

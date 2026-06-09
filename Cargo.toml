@@ -1,13 +1,13 @@
 [package]
-name = "blas_rs"
+name = "blas-rs"
 version = "1.0.0-alpha.3"
 edition = "2024"
 authors = ["ronakgh {ronakgh97@gmail.com}"]
-description = "Experimental f32 BLAS kernels for x86_64 cpu"
+description = "Experimental F32 BLAS & Intel Math kernels library for x86_64 cpu"
 license = "MIT"
 repository = "https://github.com/ronakgh97/blas-rs"
 readme = "README.md"
-categories = ["mathematics","rust-patterns", "high-performance-computing", "science"]
+categories = ["mathematics","rust-patterns", "hardware-support", "science"]
 keywords = ["blas", "simd", "math", "high-performance", "x86_64"]
 
 [lib]

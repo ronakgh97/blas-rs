@@ -1,4 +1,5 @@
 use crate::utils::reduce_f32;
+use std::arch::x86_64::_MM_HINT_T0;
 #[allow(unused_imports)]
 use std::arch::x86_64::{
     __m256i, _CMP_GT_OQ, _CMP_LT_OQ, _MM_HINT_ET0, _MM_HINT_NTA, _MM_HINT_T1, _MM_HINT_T2,
@@ -71,8 +72,10 @@ pub fn axpy(n: usize, alpha: f32, x: &[f32], incx: i32, y: &mut [f32], incy: i32
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 96) as *const i8, _MM_HINT_T2);
-                _mm_prefetch(y_ptr.add(i + 96) as *const i8, _MM_HINT_NTA);
+                {
+                    _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(y_ptr.add(i + 256) as *const i8, _MM_HINT_T0);
+                }
             }
 
             // Handle one AVX register at a time.
@@ -187,10 +190,10 @@ pub unsafe fn axpy_unsafe(n: usize, alpha: f32, x: &[f32], incx: i32, y: &mut [f
 
                 i += 32;
 
-                // I don't know, how to rightfully use this
-
-                _mm_prefetch(x_ptr.add(i + 96) as *const i8, _MM_HINT_T2);
-                _mm_prefetch(y_ptr.add(i + 96) as *const i8, _MM_HINT_NTA);
+                {
+                    _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(y_ptr.add(i + 256) as *const i8, _MM_HINT_T0);
+                }
             }
 
             // Handle one AVX register at a time.
@@ -756,8 +759,8 @@ pub fn dot(n: usize, x: &[f32], incx: i32, y: &[f32], incy: i32) -> f32 {
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 64) as *const i8, _MM_HINT_T1);
-                _mm_prefetch(y_ptr.add(i + 64) as *const i8, _MM_HINT_T1);
+                _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_T1);
+                _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_T1);
             }
 
             while i + 8 <= n {
@@ -868,8 +871,8 @@ pub unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy: i32) -
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 48) as *const i8, _MM_HINT_T1);
-                _mm_prefetch(y_ptr.add(i + 48) as *const i8, _MM_HINT_T1);
+                _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_T1);
+                _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_T1);
             }
 
             while i + 8 <= n {
@@ -1063,7 +1066,7 @@ pub fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 64) as *const i8, _MM_HINT_T2);
+                _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_T2);
             }
         }
 
@@ -1166,7 +1169,7 @@ pub fn asum(n: usize, x: &[f32], incx: i32) -> f32 {
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 64) as *const i8, _MM_HINT_NTA);
+                _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_T2);
             }
         }
 
@@ -1258,7 +1261,7 @@ pub fn asum_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 64) as *const i8, _MM_HINT_NTA);
+                _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_NTA);
             }
         }
 
@@ -1404,7 +1407,7 @@ pub fn i_amax(n: usize, x: &[f32], incx: i32) -> usize {
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 64) as *const i8, _MM_HINT_NTA);
+                _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_NTA);
             }
 
             let cmp01 = _mm256_cmp_ps(la_vals1, la_vals0, _CMP_GT_OQ);
@@ -1568,7 +1571,7 @@ pub fn i_amin(n: usize, x: &[f32], incx: i32) -> usize {
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 64) as *const i8, _MM_HINT_NTA);
+                _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_NTA);
             }
 
             let cmp01 = _mm256_cmp_ps(sm_vals1, sm_vals0, _CMP_LT_OQ);
@@ -1711,8 +1714,8 @@ pub fn rot(n: usize, x: &mut [f32], incx: i32, y: &mut [f32], incy: i32, c: f32,
                 _mm256_storeu_ps(y_ptr.add(i + 24), ry3);
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 64) as *const i8, _MM_HINT_ET0);
-                _mm_prefetch(y_ptr.add(i + 64) as *const i8, _MM_HINT_ET0);
+                _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_ET0);
+                _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_ET0);
             }
             while i + 8 <= n {
                 let x = _mm256_loadu_ps(x_ptr.add(i));
