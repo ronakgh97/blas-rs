@@ -24,8 +24,16 @@ impl Noise {
 
     /// Generates a random number of type `T` in the inclusive range `[min, max]`
     #[inline(always)]
-    pub fn rand_range<T: std::cmp::PartialOrd + SampleUniform>(&mut self, min: T, max: T) -> T {
+    pub fn rand_range<T: PartialOrd + SampleUniform>(&mut self, min: T, max: T) -> T {
         self.rng.random_range(min..=max)
+    }
+
+    /// Fills a buffer with random `i32` values `[-1, 0, 1]`
+    #[inline(always)]
+    pub fn fill_i32(&mut self, buf: &mut [i32]) {
+        for x in buf {
+            *x = self.rng.random_range(-1i32..=1i32);
+        }
     }
 
     /// Fills a buffer with random `f32` values in the range `[-1.0, 1.0]`
@@ -36,13 +44,6 @@ impl Noise {
         }
     }
 
-    /// Fills a buffer with random `i32` values `[-1, 0, 1]`
-    #[inline(always)]
-    pub fn fill_i32(&mut self, buf: &mut [i32]) {
-        for x in buf {
-            *x = self.rng.random_range(-1i32..=1i32);
-        }
-    }
     /// Fills a buffer with random bytes
     #[inline(always)]
     pub fn fill_bytes(&mut self, buf: &mut [u8]) {

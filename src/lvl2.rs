@@ -95,9 +95,8 @@ pub fn gemv(
                     let col2 = a_ptr.add((j + 2) * lda);
                     let col3 = a_ptr.add((j + 3) * lda);
 
-                    if j + 4 < n {
-                        _mm_prefetch(a_ptr.add((j + 4) * lda) as *const i8, _MM_HINT_NTA);
-                    }
+                    _mm_prefetch(a_ptr.add((j + 4) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 11) * lda) as *const i8, _MM_HINT_NTA);
 
                     let mut i = 0usize;
                     // process 32 rows (load 4 reg for y and ~8 reg for a's col and 4 for store)
@@ -291,9 +290,8 @@ pub fn gemv(
                     let x_val = alpha * *x_ptr.offset(ix_b + j as isize * incx_isize);
                     let col = a_ptr.add(j * lda);
 
-                    if j + 1 < n {
-                        _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
-                    }
+                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
 
                     // strided axpy into y
                     let mut iy = iy_b;
@@ -333,9 +331,8 @@ pub fn gemv(
                     let col0 = a_ptr.add(j * lda);
                     let col1 = a_ptr.add((j + 1) * lda);
 
-                    if j + 2 < n {
-                        _mm_prefetch(a_ptr.add((j + 2) * lda) as *const i8, _MM_HINT_NTA);
-                    }
+                    _mm_prefetch(a_ptr.add((j + 2) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 9) * lda) as *const i8, _MM_HINT_NTA);
 
                     // set 4 acc from each column
                     let mut sum0_0 = _mm256_setzero_ps();
@@ -444,9 +441,8 @@ pub fn gemv(
                 for j in 0..n {
                     let col = a_ptr.add(j * lda);
 
-                    if j + 1 < n {
-                        _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
-                    }
+                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
 
                     // four accumulators for the dot product,
                     // we will reduce them at the end
@@ -509,12 +505,8 @@ pub fn gemv(
                 for j in 0..n {
                     let col = a_ptr.add(j * lda);
 
-                    if j + 1 < n {
-                        _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
-                    }
-                    if j + 8 < n {
-                        _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
-                    }
+                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
 
                     // compute dot
                     let mut ix = ix_b;

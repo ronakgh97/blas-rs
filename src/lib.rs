@@ -12,7 +12,7 @@
 //! - [`lvl3`]: implements for matrix-matrix routines.
 //! - [`utils`]: internal helpers used by kernels and tests.
 //!
-//! ## Implemented routines [WIP](https://github.com/ronakgh97/blas_rs) (WIP)
+//! ## Implemented kernels [WIP](https://github.com/ronakgh97/blas_rs)
 //!
 //! - lvl1: `axpy`, `scal`, `copy`, `swap`, `dot`, `nrm2`, `asum`, `i_amax`, `rot`, `rotg`.
 //! - lvl2: `gemv`
@@ -23,8 +23,8 @@
 //! ```rust
 //! use blas_rs::lvl1;
 //!
-//! let n = 4;
-//! let alpha = 2.0_f32;
+//! let n: usize = 4;
+//! let alpha: f32 = 2.0;
 //! let x = vec![1.0, 2.0, 3.0, 4.0];
 //! let mut y = vec![10.0, 20.0, 30.0, 40.0];
 //!
@@ -48,7 +48,7 @@
 //! - [Intel doc](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/blas-routines.html)
 //! - [intrinsics guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html)
 //!
-//! ### Checkout benchmarks: [gitHub](https://github.com/ronakgh97/blas_rs)
+//! ### Checkout benchmarks: [GitHub](https://github.com/ronakgh97/blas_rs)
 //!
 
 #[cfg(not(target_arch = "x86_64"))]
