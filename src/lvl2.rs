@@ -77,29 +77,35 @@ pub fn gemv(
         if incx == 1 && incy == 1 {
             unsafe {
                 let mut j = 0usize;
-                // 4 col unrolling
-                while j + 3 < n {
+                // 6 col unrolling
+                while j + 5 < n {
                     let alpha_x0 = alpha * *x_ptr.add(j);
                     let alpha_x1 = alpha * *x_ptr.add(j + 1);
                     let alpha_x2 = alpha * *x_ptr.add(j + 2);
                     let alpha_x3 = alpha * *x_ptr.add(j + 3);
+                    let alpha_x4 = alpha * *x_ptr.add(j + 4);
+                    let alpha_x5 = alpha * *x_ptr.add(j + 5);
 
                     // load x alpha's
                     let ax0 = _mm256_set1_ps(alpha_x0);
                     let ax1 = _mm256_set1_ps(alpha_x1);
                     let ax2 = _mm256_set1_ps(alpha_x2);
                     let ax3 = _mm256_set1_ps(alpha_x3);
+                    let ax4 = _mm256_set1_ps(alpha_x4);
+                    let ax5 = _mm256_set1_ps(alpha_x5);
 
                     let col0 = a_ptr.add(j * lda);
                     let col1 = a_ptr.add((j + 1) * lda);
                     let col2 = a_ptr.add((j + 2) * lda);
                     let col3 = a_ptr.add((j + 3) * lda);
+                    let col4 = a_ptr.add((j + 4) * lda);
+                    let col5 = a_ptr.add((j + 5) * lda);
 
-                    _mm_prefetch(a_ptr.add((j + 4) * lda) as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(a_ptr.add((j + 11) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 5) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 12) * lda) as *const i8, _MM_HINT_NTA);
 
                     let mut i = 0usize;
-                    // process 32 rows (load 4 reg for y and ~8 reg for a's col and 4 for store)
+                    // process 32 rows (load 4 reg for y and ~6 reg for a's col and 4 for store)
                     while i + 32 <= m {
                         // load y write buf once
                         let mut y0 = _mm256_loadu_ps(y_ptr.add(i));
@@ -107,9 +113,9 @@ pub fn gemv(
                         let mut y2 = _mm256_loadu_ps(y_ptr.add(i + 16));
                         let mut y3 = _mm256_loadu_ps(y_ptr.add(i + 24));
 
-                        // load 4 col of A and do 4 fmadd for each col;
-                        // i.e. 128 ops for 32 rows * 4 col with just 4 loads of x and 16 loads of A, and 4 stores for y;
-                        // we are doing a lot of work with minimal loads/stores, just praying for cpu-chan to schedule well
+                        // load 6 col of A and do 6 fma for each col;
+                        // we are doing a lot of work with minimal loads/stores,
+                        // just praying for cpu-chan to schedule well
 
                         // col 1
                         let c10 = _mm256_loadu_ps(col0.add(i));
@@ -151,9 +157,29 @@ pub fn gemv(
                         y2 = _mm256_fmadd_ps(ax3, c42, y2);
                         y3 = _mm256_fmadd_ps(ax3, c43, y3);
 
-                        // write back once per 4 col
-                        // TODO; store/compute/load all iteration is HEAVY!!!,
-                        //  we can load 4 col and just pray for cpu
+                        // col 5
+                        let c50 = _mm256_loadu_ps(col4.add(i));
+                        let c51 = _mm256_loadu_ps(col4.add(i + 8));
+                        let c52 = _mm256_loadu_ps(col4.add(i + 16));
+                        let c53 = _mm256_loadu_ps(col4.add(i + 24));
+                        y0 = _mm256_fmadd_ps(ax4, c50, y0);
+                        y1 = _mm256_fmadd_ps(ax4, c51, y1);
+                        y2 = _mm256_fmadd_ps(ax4, c52, y2);
+                        y3 = _mm256_fmadd_ps(ax4, c53, y3);
+
+                        // col 6
+                        let c60 = _mm256_loadu_ps(col5.add(i));
+                        let c61 = _mm256_loadu_ps(col5.add(i + 8));
+                        let c62 = _mm256_loadu_ps(col5.add(i + 16));
+                        let c63 = _mm256_loadu_ps(col5.add(i + 24));
+                        y0 = _mm256_fmadd_ps(ax5, c60, y0);
+                        y1 = _mm256_fmadd_ps(ax5, c61, y1);
+                        y2 = _mm256_fmadd_ps(ax5, c62, y2);
+                        y3 = _mm256_fmadd_ps(ax5, c63, y3);
+
+                        // write back once per 6 col
+                        // TODO; store/compute/load all iteration is SLOW HEAVY!!!,
+                        //  we can load 6 col and just pray for cpu
                         _mm256_storeu_ps(y_ptr.add(i), y0);
                         _mm256_storeu_ps(y_ptr.add(i + 8), y1);
                         _mm256_storeu_ps(y_ptr.add(i + 16), y2);
@@ -162,32 +188,36 @@ pub fn gemv(
                         i += 32;
                     }
 
-                    // squeeze out everything (1 y load per 4 col)
+                    // squeeze out everything (1 y load per 6 col)
                     while i + 8 <= m {
                         let mut y0 = _mm256_loadu_ps(y_ptr.add(i));
                         y0 = _mm256_fmadd_ps(ax0, _mm256_loadu_ps(col0.add(i)), y0);
                         y0 = _mm256_fmadd_ps(ax1, _mm256_loadu_ps(col1.add(i)), y0);
                         y0 = _mm256_fmadd_ps(ax2, _mm256_loadu_ps(col2.add(i)), y0);
                         y0 = _mm256_fmadd_ps(ax3, _mm256_loadu_ps(col3.add(i)), y0);
+                        y0 = _mm256_fmadd_ps(ax4, _mm256_loadu_ps(col4.add(i)), y0);
+                        y0 = _mm256_fmadd_ps(ax5, _mm256_loadu_ps(col5.add(i)), y0);
                         _mm256_storeu_ps(y_ptr.add(i), y0);
                         i += 8;
                     }
 
-                    // fallback
+                    // scalar fallback
                     while i < m {
                         let mut v = *y_ptr.add(i);
                         v = alpha_x0.mul_add(*col0.add(i), v);
                         v = alpha_x1.mul_add(*col1.add(i), v);
                         v = alpha_x2.mul_add(*col2.add(i), v);
                         v = alpha_x3.mul_add(*col3.add(i), v);
+                        v = alpha_x4.mul_add(*col4.add(i), v);
+                        v = alpha_x5.mul_add(*col5.add(i), v);
                         *y_ptr.add(i) = v;
                         i += 1;
                     }
 
-                    j += 4; // step by 4 col
+                    j += 6; // step by 6 col
                 }
 
-                // process 1 col if n is odd/not divisible by 4
+                // process 1 col if n is odd/not divisible by 6
                 while j < n {
                     let alpha_x = alpha * *x_ptr.add(j);
                     let bx = _mm256_set1_ps(alpha_x);
@@ -240,6 +270,9 @@ pub fn gemv(
                     let bx = _mm256_set1_ps(alpha_x);
                     let col = a_ptr.add(j * lda);
 
+                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
+
                     let mut i = 0usize;
                     while i + 32 <= m {
                         // load (8x4) block of A and y, do axpy, store to y; this is the rizz part
@@ -290,8 +323,8 @@ pub fn gemv(
                     let x_val = alpha * *x_ptr.offset(ix_b + j as isize * incx_isize);
                     let col = a_ptr.add(j * lda);
 
-                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
+                    //_mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
+                    //_mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
 
                     // strided axpy into y
                     let mut iy = iy_b;
@@ -325,84 +358,92 @@ pub fn gemv(
             if incx == 1 && incy == 1 {
                 let mut j = 0usize;
 
-                // TODO; use 4 col?
-                // process 2 columns to maximize X vector reuse
-                while j + 1 < n {
+                // process 4 columns to maximize X vector reuse
+                while j + 3 < n {
                     let col0 = a_ptr.add(j * lda);
                     let col1 = a_ptr.add((j + 1) * lda);
+                    let col2 = a_ptr.add((j + 2) * lda);
+                    let col3 = a_ptr.add((j + 3) * lda);
 
-                    _mm_prefetch(a_ptr.add((j + 2) * lda) as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(a_ptr.add((j + 9) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 4) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
 
                     // set 4 acc from each column
                     let mut sum0_0 = _mm256_setzero_ps();
                     let mut sum0_1 = _mm256_setzero_ps();
-                    let mut sum0_2 = _mm256_setzero_ps();
-                    let mut sum0_3 = _mm256_setzero_ps();
 
                     let mut sum1_0 = _mm256_setzero_ps();
                     let mut sum1_1 = _mm256_setzero_ps();
-                    let mut sum1_2 = _mm256_setzero_ps();
-                    let mut sum1_3 = _mm256_setzero_ps();
+
+                    let mut sum2_0 = _mm256_setzero_ps();
+                    let mut sum2_1 = _mm256_setzero_ps();
+
+                    let mut sum3_0 = _mm256_setzero_ps();
+                    let mut sum3_1 = _mm256_setzero_ps();
 
                     let mut i = 0usize;
 
-                    while i + 32 <= m {
-                        // load x once (32 floats)
+                    while i + 16 <= m {
+                        // load x once (16 floats)
                         let x0 = _mm256_loadu_ps(x_ptr.add(i));
                         let x1 = _mm256_loadu_ps(x_ptr.add(i + 8));
-                        let x2 = _mm256_loadu_ps(x_ptr.add(i + 16));
-                        let x3 = _mm256_loadu_ps(x_ptr.add(i + 24));
 
                         // compute fma for col 0
                         sum0_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i)), x0, sum0_0);
                         sum0_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i + 8)), x1, sum0_1);
-                        sum0_2 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i + 16)), x2, sum0_2);
-                        sum0_3 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i + 24)), x3, sum0_3);
 
                         // compute fma for col 1
                         sum1_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i)), x0, sum1_0);
                         sum1_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i + 8)), x1, sum1_1);
-                        sum1_2 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i + 16)), x2, sum1_2);
-                        sum1_3 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i + 24)), x3, sum1_3);
 
-                        i += 32;
+                        //compute fma for col2
+                        sum2_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i)), x0, sum2_0);
+                        sum2_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i + 8)), x1, sum2_1);
+
+                        //compute fma for col 3
+                        sum3_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i)), x0, sum3_0);
+                        sum3_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i + 8)), x1, sum3_1);
+
+                        i += 16;
                     }
 
+                    // if 8 rows remaining
                     while i + 8 <= m {
                         let x0 = _mm256_loadu_ps(x_ptr.add(i));
                         sum0_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i)), x0, sum0_0);
                         sum1_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i)), x0, sum1_0);
+                        sum2_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i)), x0, sum2_0);
+                        sum3_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i)), x0, sum3_0);
                         i += 8;
                     }
 
-                    // combine acc for col 2
-                    let sum0_01 = _mm256_add_ps(sum0_0, sum0_1);
-                    let sum0_23 = _mm256_add_ps(sum0_2, sum0_3);
-                    let mut dot0 = reduce_f32(_mm256_add_ps(sum0_01, sum0_23));
-
-                    // combine acc for col 1
-                    let sum1_01 = _mm256_add_ps(sum1_0, sum1_1);
-                    let sum1_23 = _mm256_add_ps(sum1_2, sum1_3);
-                    let mut dot1 = reduce_f32(_mm256_add_ps(sum1_01, sum1_23));
+                    // reduction of acc
+                    let mut dot0 = reduce_f32(_mm256_add_ps(sum0_0, sum0_1));
+                    let mut dot1 = reduce_f32(_mm256_add_ps(sum1_0, sum1_1));
+                    let mut dot2 = reduce_f32(_mm256_add_ps(sum2_0, sum2_1));
+                    let mut dot3 = reduce_f32(_mm256_add_ps(sum3_0, sum3_1));
 
                     // scalar fallback
                     while i < m {
                         let x_val = *x_ptr.add(i);
-                        dot0 += *col0.add(i) * x_val;
-                        dot1 += *col1.add(i) * x_val;
+                        dot0 = x_val.mul_add(*col0.add(i), dot0);
+                        dot1 = x_val.mul_add(*col1.add(i), dot1);
+                        dot2 = x_val.mul_add(*col2.add(i), dot2);
+                        dot3 = x_val.mul_add(*col3.add(i), dot3);
                         i += 1;
                     }
 
                     // write back with alpha scaling (contiguous)
                     *y_ptr.add(j) = alpha.mul_add(dot0, *y_ptr.add(j));
                     *y_ptr.add(j + 1) = alpha.mul_add(dot1, *y_ptr.add(j + 1));
+                    *y_ptr.add(j + 2) = alpha.mul_add(dot2, *y_ptr.add(j + 2));
+                    *y_ptr.add(j + 3) = alpha.mul_add(dot3, *y_ptr.add(j + 3));
 
-                    j += 2;
+                    j += 4;
                 }
 
-                // if n is odd, process last column; no reuse but still simd dot product
-                if j < n {
+                // if n is not divisible by 4, process remaining columns; no reuse but still simd dot product
+                while j < n {
                     let col = a_ptr.add(j * lda);
                     let mut sum0 = _mm256_setzero_ps();
                     let mut sum1 = _mm256_setzero_ps();
@@ -421,6 +462,7 @@ pub fn gemv(
                         );
                         i += 16;
                     }
+
                     while i + 8 <= m {
                         sum0 = _mm256_fmadd_ps(
                             _mm256_loadu_ps(col.add(i)),
@@ -432,10 +474,12 @@ pub fn gemv(
 
                     let mut dot_val = reduce_f32(_mm256_add_ps(sum0, sum1));
                     while i < m {
-                        dot_val += *col.add(i) * *x_ptr.add(i);
+                        dot_val = (*col.add(i)).mul_add(*x_ptr.add(i), dot_val);
                         i += 1;
                     }
+
                     *y_ptr.add(j) = alpha.mul_add(dot_val, *y_ptr.add(j));
+                    j += 1;
                 }
             } else if incx == 1 {
                 for j in 0..n {
@@ -483,8 +527,7 @@ pub fn gemv(
                     // reduce to scalar
                     let sum01 = _mm256_add_ps(sum0, sum1);
                     let sum23 = _mm256_add_ps(sum2, sum3);
-                    let sum = _mm256_add_ps(sum01, sum23);
-                    let mut dot_val = reduce_f32(sum);
+                    let mut dot_val = reduce_f32(_mm256_add_ps(sum01, sum23));
 
                     // any remaining
                     while i < m {
@@ -505,8 +548,8 @@ pub fn gemv(
                 for j in 0..n {
                     let col = a_ptr.add(j * lda);
 
-                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
+                    //_mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
+                    //_mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
 
                     // compute dot
                     let mut ix = ix_b;

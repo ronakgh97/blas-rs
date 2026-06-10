@@ -54,7 +54,10 @@
 #[cfg(not(target_arch = "x86_64"))]
 compile_error!("blas_rs is strictly supported on x86_64 architectures");
 
-#[cfg(any(not(target_feature = "avx2"), not(target_feature = "fma")))]
+#[cfg(all(
+    not(doc),
+    any(not(target_feature = "avx2"), not(target_feature = "fma"))
+))]
 compile_error!(
     "blas_rs requires some x86-64-v3 CPU capable features. Try compiling with `-C target-cpu=x86-64-v3`"
 );
