@@ -1,8 +1,8 @@
 use crate::lvl1::scal;
 use crate::utils::reduce_f32;
 use std::arch::x86_64::{
-    _MM_HINT_NTA, _mm_prefetch, _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps,
-    _mm256_setzero_ps, _mm256_storeu_ps,
+    _MM_HINT_NTA, _MM_HINT_T0, _mm_prefetch, _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps,
+    _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -58,6 +58,8 @@ pub fn gemv(
     let incx_isize = incx as isize;
     let incy_isize = incy as isize;
 
+    const PREFETCH_DIST: usize = 128;
+
     // NOTE; bench insights TODO;
 
     // non-transposed case; axpy each col of A scaled by x[j] into y; prefetch next col of A
@@ -101,10 +103,11 @@ pub fn gemv(
                     let col4 = a_ptr.add((j + 4) * lda);
                     let col5 = a_ptr.add((j + 5) * lda);
 
-                    _mm_prefetch(a_ptr.add((j + 5) * lda) as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(a_ptr.add((j + 12) * lda) as *const i8, _MM_HINT_NTA);
+                    //_mm_prefetch(a_ptr.add((j + 5) * lda) as *const i8, _MM_HINT_NTA);
+                    //_mm_prefetch(a_ptr.add((j + 12) * lda) as *const i8, _MM_HINT_NTA);
 
                     let mut i = 0usize;
+
                     // process 32 rows (load 4 reg for y and ~6 reg for a's col and 4 for store)
                     while i + 32 <= m {
                         // load y write buf once
@@ -116,6 +119,13 @@ pub fn gemv(
                         // load 6 col of A and do 6 fma for each col;
                         // we are doing a lot of work with minimal loads/stores,
                         // just praying for cpu-chan to schedule well
+
+                        _mm_prefetch(col0.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(col1.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(col2.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(col3.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(col4.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(col5.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
 
                         // col 1
                         let c10 = _mm256_loadu_ps(col0.add(i));
@@ -354,8 +364,9 @@ pub fn gemv(
 
         // simd path, load columns of A and x, do dot product, store to y;
         // prefetch/pray future columns of A for rizzing cpu-chan
-        unsafe {
-            if incx == 1 && incy == 1 {
+
+        if incx == 1 && incy == 1 {
+            unsafe {
                 let mut j = 0usize;
 
                 // process 4 columns to maximize X vector reuse
@@ -364,6 +375,9 @@ pub fn gemv(
                     let col1 = a_ptr.add((j + 1) * lda);
                     let col2 = a_ptr.add((j + 2) * lda);
                     let col3 = a_ptr.add((j + 3) * lda);
+                    // for prefetch
+                    let col4: *const f32 = a_ptr.add((j + 4) * lda);
+                    let col5: *const f32 = a_ptr.add((j + 5) * lda);
 
                     _mm_prefetch(a_ptr.add((j + 4) * lda) as *const i8, _MM_HINT_NTA);
                     _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
@@ -383,7 +397,14 @@ pub fn gemv(
 
                     let mut i = 0usize;
 
+                    const PREFETCH_DIST: usize = 128;
+
                     while i + 16 <= m {
+                        _mm_prefetch(col0.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(col1.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(col2.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(col3.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+
                         // load x once (16 floats)
                         let x0 = _mm256_loadu_ps(x_ptr.add(i));
                         let x1 = _mm256_loadu_ps(x_ptr.add(i + 8));
@@ -403,6 +424,9 @@ pub fn gemv(
                         //compute fma for col 3
                         sum3_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i)), x0, sum3_0);
                         sum3_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i + 8)), x1, sum3_1);
+
+                        _mm_prefetch(col4.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(col5.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
 
                         i += 16;
                     }
@@ -481,7 +505,9 @@ pub fn gemv(
                     *y_ptr.add(j) = alpha.mul_add(dot_val, *y_ptr.add(j));
                     j += 1;
                 }
-            } else if incx == 1 {
+            }
+        } else if incx == 1 {
+            unsafe {
                 for j in 0..n {
                     let col = a_ptr.add(j * lda);
 
@@ -543,8 +569,10 @@ pub fn gemv(
                         *y_ptr.offset(iy) = alpha.mul_add(dot_val, *y_ptr.offset(iy));
                     }
                 }
-                // non-simd path, just do the dot product with prefetching, no rizz
-            } else {
+            }
+            // non-simd path, just do the dot product with prefetching, no rizz
+        } else {
+            unsafe {
                 for j in 0..n {
                     let col = a_ptr.add(j * lda);
 
@@ -575,8 +603,8 @@ fn gemv_test() {
     use std::time::Instant;
 
     let warmup_count = 64;
-    let run_count = 368;
-    let size = 1024;
+    let run_count = 256;
+    let size = 1256;
 
     println!("size: {}", size);
 
