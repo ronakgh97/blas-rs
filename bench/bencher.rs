@@ -2,9 +2,10 @@ mod harness;
 mod utils;
 
 use crate::harness::{MetricSet, run_bench};
-use crate::utils::{axpy_ob, dot_ob, gemv_ob};
+use crate::utils::{axpy_ob, dot_ob, gemm_ob, gemv_ob};
 use blas_rs::lvl1::{axpy, axpy_unsafe, dot, dot_unsafe};
 use blas_rs::lvl2::gemv;
+use blas_rs::lvl3::gemm;
 use blas_rs::utils::*;
 use std::error::Error;
 #[allow(unused)]
@@ -134,7 +135,7 @@ fn main() {
 
     // BENCH TOTAL `target_time` = (sample_len * no of bench) seconds
     let target_time = TAU; // big enough to run least some runs in largest samples
-    let size_sample = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
+    let size_sample = [128, 256, 512, 1024, 2048, 4096, 8192, 16384];
 
     let plot_path = Path::new("./bench/plot");
 
@@ -144,7 +145,7 @@ fn main() {
         .to_lowercase();
 
     let kernels: Vec<&str> = if kernel == "all" {
-        vec!["axpy", "dot", "gemv", "gemv_t"] // order
+        vec!["axpy", "dot", "gemv", "gemv_t", "gemm"] // order
     } else {
         kernel.split(',').collect()
     };
@@ -166,6 +167,10 @@ fn main() {
             "gemv_t" => {
                 println!("Running GEMV Transposed benchmark...");
                 bench_gemv_t(&size_sample, target_time, plot_path)
+            }
+            "gemm" => {
+                println!("Running GEMM benchmark...");
+                bench_gemm_f_f(&size_sample, target_time, plot_path)
             }
             _ => {
                 eprintln!(
@@ -245,7 +250,7 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
     metrics_collector.finalize(&mut bench_metrics);
 
     match plot_bench(&bench_metrics, &plot_path.join("axpy.png")) {
-        Ok(_) => println!("Exported"),
+        Ok(_) => println!(),
         Err(err) => {
             eprintln!("failed to render benchmark plot: {err}");
         }
@@ -324,7 +329,7 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
     metrics_collector.finalize(&mut metrics);
 
     match plot_bench(&metrics, &plot_path.join("dot.png")) {
-        Ok(_) => println!("Exported"),
+        Ok(_) => println!(),
         Err(err) => {
             eprintln!("failed to render benchmark plot: {err}");
         }
@@ -434,7 +439,7 @@ fn bench_gemv(size_sample: &[usize], target_time: f64, plot_path: &Path) {
     metrics_collector.finalize(&mut metrics);
 
     match plot_bench(&metrics, &plot_path.join("gemv.png")) {
-        Ok(_) => println!("Exported"),
+        Ok(_) => println!(),
         Err(err) => {
             eprintln!("failed to render benchmark plot: {err}");
         }
@@ -543,14 +548,120 @@ fn bench_gemv_t(size_sample: &[usize], target_time: f64, plot_path: &Path) {
     metrics_collector.finalize(&mut metrics);
 
     match plot_bench(&metrics, &plot_path.join("gemv_t.png")) {
-        Ok(_) => println!("Exported"),
+        Ok(_) => println!(),
         Err(err) => {
             eprintln!("failed to render benchmark plot: {err}");
         }
     }
 }
 
-#[inline(always)]
+// TODO: stuck!!! fix later
+fn bench_gemm_f_f(size_sample: &[usize], target_time: f64, plot_path: &Path) {
+    let mut noise = Noise::init();
+    let mut metrics: Vec<BenchMetrics> = Vec::new();
+    let mut metrics_collector = MetricSet::new();
+
+    for &i in size_sample {
+        let mut a_buf = vec![0.0f32; i * i];
+        let mut x_buf = vec![0.0f32; i * i];
+        let mut y1_buf = vec![0.0f32; i * i];
+        let mut y2_buf = vec![0.0f32; i * i];
+
+        black_box(&mut a_buf);
+        black_box(&mut x_buf);
+        black_box(&mut y1_buf);
+        black_box(&mut y2_buf);
+
+        noise.fill_f32(&mut a_buf);
+        noise.fill_f32(&mut x_buf);
+
+        y2_buf.fill(1.0);
+        let rc = run_bench(
+            || {
+                gemm(
+                    i, // m
+                    i, // n
+                    i, // k
+                    5.0,
+                    &a_buf, // matrix A
+                    i,      // lda
+                    &x_buf, // matrix B
+                    i,      // ldb
+                    7.0,
+                    &mut y1_buf, // result C
+                    i,           // ldc
+                    false,
+                    false,
+                );
+            },
+            target_time,
+        );
+
+        y2_buf.fill(1.0);
+        let rc_ob = run_bench(
+            || {
+                gemm_ob(
+                    i as i32, // m
+                    i as i32, // n
+                    i as i32, // k
+                    5.0,
+                    &a_buf,   // matrix A
+                    i as i32, // lda
+                    &x_buf,   // matrix B
+                    i as i32, // ldb
+                    7.0,
+                    &mut y2_buf, // result C
+                    i as i32,    // ldc
+                    false,
+                    false,
+                );
+            },
+            target_time,
+        );
+
+        let working_kbyte =
+            (2.0 * i.pow(2) as f64 + 3.0 * i.pow(2) as f64) * size_of::<f32>() as f64 / 1024.0;
+        let total_flops = 2.0 * i.pow(3) as f64 * rc;
+        let total_flops_ob = 2.0 * i.pow(3) as f64 * rc_ob;
+
+        let (gflops, gflops_ob, latency, latency_ob, cache_eff, ns_per_flop) = MetricSet::derive(
+            rc,
+            rc_ob,
+            target_time,
+            total_flops,
+            total_flops_ob,
+            working_kbyte,
+        );
+
+        let gflops_rel = (gflops - gflops_ob) / gflops_ob * 100.0;
+        let latency_rel = (latency - latency_ob) / latency_ob * 100.0;
+
+        metrics_collector.collect(
+            ((i as f64).log10(), gflops),
+            ((i as f64).log10(), latency.log10()),
+            ((i as f64).log10(), cache_eff),
+            (working_kbyte.log10(), ns_per_flop),
+            ((i as f64).log10(), gflops_rel),
+            ((i as f64).log10(), latency_rel),
+        );
+
+        noise.fill_f32(&mut a_buf);
+        noise.fill_f32(&mut x_buf);
+        y1_buf.fill(1.0);
+        y2_buf.fill(1.0);
+    }
+
+    metrics_collector.finalize(&mut metrics);
+
+    match plot_bench(&metrics, &plot_path.join("gemm_f_f.png")) {
+        Ok(_) => println!(),
+        Err(err) => {
+            eprintln!("failed to render benchmark plot: {err}");
+        }
+    }
+}
+
+#[inline]
 fn plot_bench(bench_metrics: &[BenchMetrics], output: &Path) -> Result<(), Box<dyn Error>> {
     use plotters::prelude::*;
 

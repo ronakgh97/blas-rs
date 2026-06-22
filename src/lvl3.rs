@@ -1,5 +1,6 @@
 use crate::lvl1::scal;
 use crate::utils::reduce_f32;
+#[allow(unused)]
 use std::arch::x86_64::{
     _MM_HINT_T0, _MM_HINT_T1, _mm_prefetch, _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps,
     _mm256_mul_ps, _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps,
@@ -131,16 +132,16 @@ pub fn gemm(
 
                     let mut i = 0usize;
 
-                    // prefetch & pray
-                    {
-                        // prefetch p+4, p+5, p+6, p+7
-                        for offset in 0..4 {
-                            let col_ptr = a_ptr.add((p + 4 + offset) * lda);
-                            _mm_prefetch::<_MM_HINT_T0>(col_ptr as *const i8); // prefetch the first cache line of
-                            _mm_prefetch::<_MM_HINT_T0>(col_ptr.add(16) as *const i8); // next cache line
-                            _mm_prefetch::<_MM_HINT_T1>(col_ptr.add(32) as *const i8); // maybe to L2
-                        }
-                    }
+                    // // prefetch & pray
+                    // {
+                    //     // prefetch p+4, p+5, p+6, p+7
+                    //     for offset in 0..4 {
+                    //         let col_ptr = a_ptr.add((p + 4 + offset) * lda);
+                    //         _mm_prefetch::<_MM_HINT_T0>(col_ptr as *const i8); // prefetch the first cache line of
+                    //         _mm_prefetch::<_MM_HINT_T0>(col_ptr.add(16) as *const i8); // next cache line
+                    //         _mm_prefetch::<_MM_HINT_T1>(col_ptr.add(32) as *const i8); // maybe to L2
+                    //     }
+                    // }
 
                     // inner M Loop; Sequential memory access for Matrix A
                     while i + 16 <= m {

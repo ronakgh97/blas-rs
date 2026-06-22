@@ -1,4 +1,4 @@
-use blas::{saxpy, sdot, sgemv};
+use blas::{saxpy, sdot, sgemm, sgemv};
 use blas_rs::utils::get_cache_size;
 use std::sync::LazyLock;
 
@@ -47,6 +47,42 @@ pub fn gemv_ob(
             beta,
             y,
             incy,
+        );
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+pub fn gemm_ob(
+    m: i32,
+    n: i32,
+    k: i32,
+    alpha: f32,
+    a: &[f32],
+    lda: i32,
+    b: &[f32],
+    ldb: i32,
+    beta: f32,
+    c: &mut [f32],
+    ldc: i32,
+    is_trans_a: bool,
+    is_trans_b: bool,
+) {
+    unsafe {
+        sgemm(
+            if is_trans_a { b'T' } else { b'N' },
+            if is_trans_b { b'T' } else { b'N' },
+            m,
+            n,
+            k,
+            alpha,
+            a,
+            lda,
+            b,
+            ldb,
+            beta,
+            c,
+            ldc,
         );
     }
 }
