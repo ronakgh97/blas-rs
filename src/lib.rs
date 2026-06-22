@@ -40,7 +40,7 @@
 //!
 //! - APIs mirror BLAS-style signatures (`n`, raw increments, and slice buffers).
 //! - Most routines panic on invalid increments (`incx == 0`, `incy == 0`, `n ==0` etc.) or insufficient slice length for the requested stride.
-//! - This crate is not for a complete BLAS replacement; its purely learning focused and improve my understanding about x86, HPC etc.; behavior and performance may evolve as more kernels are added.
+//! - This crate is not for a complete BLAS replacement; its purely learning focused and improve my understanding about x86, HPC, etc. So behavior and performance may change as more kernels are added.
 //!
 //!
 //! ### Ref
@@ -52,7 +52,7 @@
 //!
 
 #[cfg(not(target_arch = "x86_64"))]
-compile_error!("blas_rs is strictly supported on x86_64 architectures");
+compile_error!("blas_rs is only supported on x86_64 architectures");
 
 #[cfg(all(
     not(doc),

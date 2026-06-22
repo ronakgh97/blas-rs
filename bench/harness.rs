@@ -1,11 +1,12 @@
 use crate::BenchMetrics;
 use crate::utils::MAX_L1L2_KB;
+use std::hint::black_box;
 use std::time::Instant;
 
 #[inline]
 /// Bench a function `f` by running it repeatedly until `target_time` seconds have elapsed,
-/// and returning the total number of runs completed.
-pub fn run_bench<F>(mut f: F, target_time: f64) -> f64
+/// and returning the total number of runs completed and the actual elapsed time.
+pub fn run_bench<F>(mut f: F, target_time: f64) -> (f64, f64)
 where
     F: FnMut(),
 {
@@ -14,27 +15,11 @@ where
 
     while start.elapsed().as_secs_f64() < target_time {
         f();
+        black_box(());
         runs += 1.0;
     }
 
-    runs
-}
-
-#[allow(unused)]
-/// Bench a function `f` by running it `runs` times and returning the average time per run in seconds
-fn bench<F: FnMut()>(mut f: F, runs: usize, warmup: usize) -> f64 {
-    for _ in 0..warmup {
-        f();
-    }
-
-    let start = Instant::now();
-
-    for _ in 0..runs {
-        f();
-    }
-
-    let dur = start.elapsed();
-    dur.as_secs_f64() / runs as f64
+    (runs, start.elapsed().as_secs_f64())
 }
 
 pub struct MetricSet {
@@ -78,24 +63,25 @@ impl MetricSet {
     #[inline]
     pub fn derive(
         runs: f64,
-        runs_ob: f64,
+        runs_against: f64,
         toc: f64,
+        toc_against: f64,
         total_flops: f64,
-        total_flops_ob: f64,
+        total_flops_against: f64,
         working_kb: f64,
     ) -> (f64, f64, f64, f64, f64, f64) {
         let gflops = total_flops / toc / 1e9;
-        let gflops_ob = total_flops_ob / toc / 1e9;
+        let gflops_against = total_flops_against / toc_against / 1e9;
         let latency = toc / runs * 1e9;
-        let latency_ob = toc / runs_ob * 1e9;
+        let latency_against = toc_against / runs_against * 1e9;
         let cache_eff = ((*MAX_L1L2_KB / working_kb) * 100.0).min(100.0);
         let ns_per_flop = (toc * 1e9) / total_flops;
 
         (
             gflops,
-            gflops_ob,
+            gflops_against,
             latency,
-            latency_ob,
+            latency_against,
             cache_eff,
             ns_per_flop,
         )

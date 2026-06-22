@@ -25,20 +25,20 @@ TODO:
 - handle NaN, over/underflow, return vs panic and many more edge cases :(
 - test code ref from [this](https://github.com/OpenMathLib/OpenBLAS/tree/develop) repo, currently ai-generated
 - multithreading, GPU maybe?
-- LESS BRANCHING, more SIMD, LESS FN CALLS, better DATA_READ
-- HOLY SHIT TOOOO SLOWWWWWWW KERNELS!!!!!
+- LESS BRANCHING, more SIMD, LESS FN CALLS, better DATA_READ, better CACHE
+- MAKE GEMV & GEMM FAST FOR ALL PATHS!!!
+- bench is somewhat UNFAIR AND NOT UNIFORM
 
-Bench? run **[harness](./bench/bencher.rs)** using
-`cargo bench --bench bencher all` [ref](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark) and compile
-using x86-64-v3 target-cpu, otherwise rustc will throw tantrum.
+To bench, run **[harness](./bench/bencher.rs)** using
+`cargo bench --bench bencher <kernel> or all` [ref](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark) and
+build using `RUSTFLAGS target-cpu=x86-64-v3`, otherwise rustc will throw error.
 
-install openblas "somehow"
+Install [Intel oneAPI Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/oneapi-toolkit-download.html?packages=oneapi-toolkit&oneapi-toolkit-os=linux&oneapi-lin=offline)
+then copy the `.dll` or `.so` into the project root:
+windows - `Copy-Item "C:\Program Files (x86)\Intel\oneAPI\compiler\2026.0\bin\libiomp5md.dll" .`
+linux - `cp /opt/intel/oneapi/compiler/latest/lib/libiomp5.so .`
 
-- windows: clone [vcpkg](https://github.com/microsoft/vcpkg.git), run `.\bootstrap-vcpkg.bat`, then
-  `.\vcpkg install openblas:x64-windows` and `setx VCPKG_ROOT=C:\path\to\vcpkg for env`
-- linux: `sudo apt install libopenblas-dev pkg-config` or `sudo pacman -S openblas pkg-config`
-
-> all are single threaded!!! ran on i7 14650hx, rust 1.96.0 - openblas isn't running NATIVE btw.
+> all are single threaded!!! ran on i7 14650hx, rust 1.96.0.
 
 **axpy**
 ![plot](bench/plot/axpy.png)
@@ -51,3 +51,6 @@ install openblas "somehow"
 
 **gemv_t**
 ![plot](bench/plot/gemv_t.png)
+
+**gemm_f_f**
+![plot](bench/plot/gemm_f_f.png)

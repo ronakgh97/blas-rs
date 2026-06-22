@@ -28,6 +28,12 @@ impl Noise {
         self.rng.random_range(min..=max)
     }
 
+    /// Generates a random boolean with probability `p` of being `true`
+    #[inline(always)]
+    pub fn bool(&mut self, p: f64) -> bool {
+        self.rng.random_bool(p)
+    }
+
     /// Fills a buffer with random `i32` values `[-1, 0, 1]`
     #[inline(always)]
     pub fn fill_i32(&mut self, buf: &mut [i32]) {

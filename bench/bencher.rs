@@ -2,7 +2,7 @@ mod harness;
 mod utils;
 
 use crate::harness::{MetricSet, run_bench};
-use crate::utils::{axpy_ob, dot_ob, gemm_ob, gemv_ob};
+use crate::utils::{axpy_intel_mkl, dot_intel_mkl, gemm_intel_mkl, gemv_intel_mkl};
 use blas_rs::lvl1::{axpy, axpy_unsafe, dot, dot_unsafe};
 use blas_rs::lvl2::gemv;
 use blas_rs::lvl3::gemm;
@@ -14,9 +14,10 @@ use std::f64::consts::TAU;
 use std::hint::black_box;
 use std::path::Path;
 
-extern crate openblas_src;
+extern crate intel_mkl_src;
 
-// Bench uses this as ref: https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark as ref
+// TODO: bench is doing some weird thing, need to investigate
+// Bench uses this as ref: https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark
 
 fn warmup(r: usize, s: usize) {
     let mut noise = Noise::init();
@@ -72,7 +73,7 @@ fn warmup(r: usize, s: usize) {
         y.fill(1.0);
 
         {
-            gemv_ob(
+            gemv_intel_mkl(
                 s as i32,
                 s as i32,
                 (i % 3) as f32,
@@ -86,7 +87,7 @@ fn warmup(r: usize, s: usize) {
                 false,
             );
 
-            gemv_ob(
+            gemv_intel_mkl(
                 s as i32,
                 s as i32,
                 (i % 3) as f32,
@@ -100,9 +101,9 @@ fn warmup(r: usize, s: usize) {
                 true,
             );
 
-            axpy_ob(s as i32, (i % 7) as f32, &y, 1, &mut vec![0.0f32; s], 1);
+            axpy_intel_mkl(s as i32, (i % 7) as f32, &y, 1, &mut vec![0.0f32; s], 1);
 
-            dot_ob(s as i32, &y, 1, &vec![0.0f32; s], 1);
+            dot_intel_mkl(s as i32, &y, 1, &vec![0.0f32; s], 1);
         }
 
         noise.fill_f32(&mut a);
@@ -124,10 +125,8 @@ enum BenchMetrics {
 
 fn main() {
     unsafe {
-        std::env::set_var("OPENBLAS_NUM_THREADS", "1");
+        std::env::set_var("MKL_NUM_THREADS", "1");
     }
-
-    warmup(32, 8192);
 
     // bit yap about axpy and dot, axpy is slightly overhead, due to` _mm256_storeu_ps`, write heavy,
     // so its write-bandwidth bound, even it whole vectors fits in cache and also "cache" does not help much since those 8 lanes are not reused.
@@ -149,6 +148,8 @@ fn main() {
     } else {
         kernel.split(',').collect()
     };
+
+    warmup(64, 4096);
 
     for k in kernels {
         match k.trim() {
@@ -174,7 +175,7 @@ fn main() {
             }
             _ => {
                 eprintln!(
-                    "Unknown kernel: '{}'. Specify: <kernel1>, <kernel2> or all",
+                    "Unknown kernel: '{}', specify: <kernel1>, <kernel2> or all",
                     k
                 );
             }
@@ -192,41 +193,58 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         let mut y1_buf = vec![0.0f32; i];
         let mut y2_buf = vec![0.0f32; i];
 
+        noise.fill_f32(&mut x_buf);
         black_box(&mut x_buf);
         black_box(&mut y1_buf);
         black_box(&mut y1_buf);
 
-        noise.fill_f32(&mut x_buf);
-        y1_buf.fill(1.0);
+        let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
+            y1_buf.fill(1.0);
+            let (rc, toc) = run_bench(
+                || unsafe { axpy_unsafe(i, 3.0, &x_buf, 1, &mut y1_buf, 1) },
+                target_time,
+            );
 
-        // Start time bound bench for both
-        let rc = run_bench(
-            || unsafe { axpy_unsafe(i, 3.0, &x_buf, 1, &mut y1_buf, 1) },
-            target_time,
-        );
+            y2_buf.fill(1.0);
+            let (rc_intel, toc_intel) = run_bench(
+                || axpy_intel_mkl(i as i32, 3.0, &x_buf, 1, &mut y2_buf, 1),
+                target_time,
+            );
 
-        y2_buf.fill(1.0); // use diff buf to prevent overflow
+            (rc, rc_intel, toc, toc_intel)
+        } else {
+            y2_buf.fill(1.0);
+            let (rc_intel, toc_intel) = run_bench(
+                || axpy_intel_mkl(i as i32, 3.0, &x_buf, 1, &mut y2_buf, 1),
+                target_time,
+            );
 
-        let rc_ob = run_bench(
-            || axpy_ob(i as i32, 3.0, &x_buf, 1, &mut y2_buf, 1),
-            target_time,
-        );
+            y1_buf.fill(1.0);
+            let (rc, toc) = run_bench(
+                || unsafe { axpy_unsafe(i, 3.0, &x_buf, 1, &mut y1_buf, 1) },
+                target_time,
+            );
+
+            (rc, rc_intel, toc, toc_intel)
+        };
 
         let working_kb = 3.0 * i as f64 * size_of::<f32>() as f64 / 1024.0; // x read + y read/write
         let total_flops = 2.0 * i as f64 * rc; // 2n FLOPs per axpy call
-        let total_flops_ob = 2.0 * i as f64 * rc_ob;
+        let total_flops_intel = 2.0 * i as f64 * rc_intel;
 
-        let (gflops, gflops_ob, latency, latency_ob, cache_eff, ns_per_flop) = MetricSet::derive(
-            rc,
-            rc_ob,
-            target_time,
-            total_flops,
-            total_flops_ob,
-            working_kb,
-        );
+        let (gflops, gflops_intel, latency, latency_intel, cache_eff, ns_per_flop) =
+            MetricSet::derive(
+                rc,
+                rc_intel,
+                toc,
+                toc_intel,
+                total_flops,
+                total_flops_intel,
+                working_kb,
+            );
 
-        let gflops_rel = (gflops - gflops_ob) / gflops_ob * 100.0;
-        let latency_rel = (latency - latency_ob) / latency_ob * 100.0;
+        let gflops_rel = (gflops - gflops_intel) / gflops_intel * 100.0;
+        let latency_rel = (latency - latency_intel) / latency_intel * 100.0;
 
         metrics_collector.collect(
             ((i as f64).log10(), gflops),
@@ -271,40 +289,61 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         black_box(&mut y1_buf);
         black_box(&mut y2_buf);
 
-        y1_buf.fill(1.0);
+        let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
+            y1_buf.fill(1.0);
+            let (rc, toc) = run_bench(
+                || unsafe {
+                    dot_unsafe(i, &x_buf, 1, &y1_buf, 1);
+                },
+                target_time,
+            );
 
-        // Start time bound bench
+            y2_buf.fill(1.0);
+            let (rc_intel, toc_intel) = run_bench(
+                || {
+                    dot_intel_mkl(i as i32, &x_buf, 1, &y2_buf, 1);
+                },
+                target_time,
+            );
 
-        let rc = run_bench(
-            || unsafe {
-                dot_unsafe(i, &x_buf, 1, &y1_buf, 1);
-            },
-            target_time,
-        );
-        y2_buf.fill(1.0);
+            (rc, rc_intel, toc, toc_intel)
+        } else {
+            y2_buf.fill(1.0);
+            let (rc_intel, toc_intel) = run_bench(
+                || {
+                    dot_intel_mkl(i as i32, &x_buf, 1, &y2_buf, 1);
+                },
+                target_time,
+            );
 
-        let rc_ob = run_bench(
-            || {
-                dot_ob(i as i32, &x_buf, 1, &y2_buf, 1);
-            },
-            target_time,
-        );
+            y1_buf.fill(1.0);
+            let (rc, toc) = run_bench(
+                || unsafe {
+                    dot_unsafe(i, &x_buf, 1, &y1_buf, 1);
+                },
+                target_time,
+            );
+
+            (rc, rc_intel, toc, toc_intel)
+        };
 
         let working_kb = 2.0 * i as f64 * size_of::<f32>() as f64 / 1024.0; // x read + y read/write
         let total_flops = 2.0 * i as f64 * rc; // 2n FLOPs per dot call
-        let total_flops_ob = 2.0 * i as f64 * rc_ob;
+        let total_flops_intel = 2.0 * i as f64 * rc_intel;
 
-        let (gflops, gflops_ob, latency, latency_ob, cache_eff, ns_per_flop) = MetricSet::derive(
-            rc,
-            rc_ob,
-            target_time,
-            total_flops,
-            total_flops_ob,
-            working_kb,
-        );
+        let (gflops, gflops_intel, latency, latency_intel, cache_eff, ns_per_flop) =
+            MetricSet::derive(
+                rc,
+                rc_intel,
+                toc,
+                toc_intel,
+                total_flops,
+                total_flops_intel,
+                working_kb,
+            );
 
-        let gflops_rel = (gflops - gflops_ob) / gflops_ob * 100.0;
-        let latency_rel = (latency - latency_ob) / latency_ob * 100.0;
+        let gflops_rel = (gflops - gflops_intel) / gflops_intel * 100.0;
+        let latency_rel = (latency - latency_intel) / latency_intel * 100.0;
 
         metrics_collector.collect(
             ((i as f64).log10(), gflops),
@@ -347,73 +386,118 @@ fn bench_gemv(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         let mut y1_buf = vec![0.0f32; i];
         let mut y2_buf = vec![0.0f32; i];
 
+        noise.fill_f32(&mut a_buf);
+        noise.fill_f32(&mut x_buf);
+
         black_box(&mut a_buf);
         black_box(&mut x_buf);
         black_box(&mut y1_buf);
         black_box(&mut y2_buf);
 
-        noise.fill_f32(&mut a_buf);
-        noise.fill_f32(&mut x_buf);
+        let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
+            y1_buf.fill(1.0);
+            let (rc, toc) = run_bench(
+                || {
+                    gemv(
+                        i, // m
+                        i, // n
+                        5.0,
+                        &a_buf, // matrix
+                        i,      // lda
+                        &x_buf, // vec
+                        1,
+                        7.0,
+                        &mut y1_buf, // result y
+                        1,
+                        false,
+                    );
+                },
+                target_time,
+            );
 
-        y1_buf.fill(1.0);
+            y2_buf.fill(1.0);
+            let (rc_intel, toc_intel) = run_bench(
+                || {
+                    gemv_intel_mkl(
+                        i as i32, // m
+                        i as i32, // n
+                        5.0,
+                        &a_buf,   // matrix
+                        i as i32, // lda
+                        &x_buf,   // vec
+                        1,
+                        7.0,
+                        &mut y2_buf, // result y
+                        1,
+                        false,
+                    );
+                },
+                target_time,
+            );
 
-        // Start time bound bench
-        let rc = run_bench(
-            || {
-                gemv(
-                    i, // m
-                    i, // n
-                    5.0,
-                    &a_buf, // matrix
-                    i,      // lda
-                    &x_buf, // vec
-                    1,
-                    7.0,
-                    &mut y1_buf, // result y
-                    1,
-                    false,
-                );
-            },
-            target_time,
-        );
+            (rc, rc_intel, toc, toc_intel)
+        } else {
+            y2_buf.fill(1.0);
+            let (rc_intel, toc_intel) = run_bench(
+                || {
+                    gemv_intel_mkl(
+                        i as i32, // m
+                        i as i32, // n
+                        5.0,
+                        &a_buf,   // matrix
+                        i as i32, // lda
+                        &x_buf,   // vec
+                        1,
+                        7.0,
+                        &mut y2_buf, // result y
+                        1,
+                        false,
+                    );
+                },
+                target_time,
+            );
 
-        y2_buf.fill(1.0); // prevent overflow
+            y1_buf.fill(1.0);
+            let (rc, toc) = run_bench(
+                || {
+                    gemv(
+                        i, // m
+                        i, // n
+                        5.0,
+                        &a_buf, // matrix
+                        i,      // lda
+                        &x_buf, // vec
+                        1,
+                        7.0,
+                        &mut y1_buf, // result y
+                        1,
+                        false,
+                    );
+                },
+                target_time,
+            );
 
-        let rc_ob = run_bench(
-            || {
-                gemv_ob(
-                    i as i32, // m
-                    i as i32, // n
-                    5.0,
-                    &a_buf,   // matrix
-                    i as i32, // lda
-                    &x_buf,   // vec
-                    1,
-                    7.0,
-                    &mut y2_buf, // result y
-                    1,
-                    false,
-                );
-            },
-            target_time,
-        );
+            (rc, rc_intel, toc, toc_intel)
+        };
 
         // no of (matrix + vector) element * write/read ops (2)
         let working_kbyte = (i.pow(2) as f64 + 3.0 * i as f64) * size_of::<f32>() as f64 / 1024.0;
         let total_flops = 2.0 * i.pow(2) as f64 * rc;
-        let total_flops_ob = 2.0 * i.pow(2) as f64 * rc_ob;
+        let total_flops_intel = 2.0 * i.pow(2) as f64 * rc_intel;
 
-        let (gflops, gflops_ob, latency, latency_ob, cache_eff, ns_per_flop) = MetricSet::derive(
-            rc,
-            rc_ob,
-            target_time,
-            total_flops,
-            total_flops_ob,
-            working_kbyte,
-        );
+        let (gflops, gflops_intel, latency, latency_intel, cache_eff, ns_per_flop) =
+            MetricSet::derive(
+                rc,
+                rc_intel,
+                toc,
+                toc_intel,
+                total_flops,
+                total_flops_intel,
+                working_kbyte,
+            );
 
-        let gflops_rel = (gflops - gflops_ob) / gflops_ob * 100.0;
-        let latency_rel = (latency - latency_ob) / latency_ob * 100.0;
+        let gflops_rel = (gflops - gflops_intel) / gflops_intel * 100.0;
+        let latency_rel = (latency - latency_intel) / latency_intel * 100.0;
 
         metrics_collector.collect(
             ((i as f64).log10(), gflops),
@@ -457,72 +541,117 @@ fn bench_gemv_t(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         let mut y1_buf = vec![0.0f32; i];
         let mut y2_buf = vec![0.0f32; i];
 
+        noise.fill_f32(&mut a_buf);
+        noise.fill_f32(&mut x_buf);
+
         black_box(&mut a_buf);
         black_box(&mut x_buf);
         black_box(&mut y1_buf);
         black_box(&mut y2_buf);
 
-        noise.fill_f32(&mut a_buf);
-        noise.fill_f32(&mut x_buf);
+        let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
+            y1_buf.fill(1.0);
+            let (rc, toc) = run_bench(
+                || {
+                    gemv(
+                        i, // m
+                        i, // n
+                        5.0,
+                        &a_buf, // matrix
+                        i,      // lda
+                        &x_buf, // vec
+                        1,
+                        7.0,
+                        &mut y1_buf, // result y
+                        1,
+                        true,
+                    );
+                },
+                target_time,
+            );
 
-        y1_buf.fill(1.0);
+            y2_buf.fill(1.0);
+            let (rc_intel, toc_intel) = run_bench(
+                || {
+                    gemv_intel_mkl(
+                        i as i32, // m
+                        i as i32, // n
+                        5.0,
+                        &a_buf,   // matrix
+                        i as i32, // lda
+                        &x_buf,   // vec
+                        1,
+                        7.0,
+                        &mut y2_buf, // result y
+                        1,
+                        true,
+                    );
+                },
+                target_time,
+            );
 
-        // Start time bound bench
-        let rc = run_bench(
-            || {
-                gemv(
-                    i, // m
-                    i, // n
-                    5.0,
-                    &a_buf, // matrix
-                    i,      // lda
-                    &x_buf, // vec
-                    1,
-                    7.0,
-                    &mut y1_buf, // result y
-                    1,
-                    true,
-                );
-            },
-            target_time,
-        );
+            (rc, rc_intel, toc, toc_intel)
+        } else {
+            y2_buf.fill(1.0);
+            let (rc_intel, toc_intel) = run_bench(
+                || {
+                    gemv_intel_mkl(
+                        i as i32, // m
+                        i as i32, // n
+                        5.0,
+                        &a_buf,   // matrix
+                        i as i32, // lda
+                        &x_buf,   // vec
+                        1,
+                        7.0,
+                        &mut y2_buf, // result y
+                        1,
+                        true,
+                    );
+                },
+                target_time,
+            );
 
-        y2_buf.fill(1.0);
+            y1_buf.fill(1.0);
+            let (rc, toc) = run_bench(
+                || {
+                    gemv(
+                        i, // m
+                        i, // n
+                        5.0,
+                        &a_buf, // matrix
+                        i,      // lda
+                        &x_buf, // vec
+                        1,
+                        7.0,
+                        &mut y1_buf, // result y
+                        1,
+                        true,
+                    );
+                },
+                target_time,
+            );
 
-        let rc_ob = run_bench(
-            || {
-                gemv_ob(
-                    i as i32, // m
-                    i as i32, // n
-                    5.0,
-                    &a_buf,   // matrix
-                    i as i32, // lda
-                    &x_buf,   // vec
-                    1,
-                    7.0,
-                    &mut y2_buf, // result y
-                    1,
-                    true,
-                );
-            },
-            target_time,
-        );
+            (rc, rc_intel, toc, toc_intel)
+        };
 
         let working_kbyte = (i.pow(2) as f64 + 3.0 * i as f64) * size_of::<f32>() as f64 / 1024.0;
         let total_flops = 2.0 * i.pow(2) as f64 * rc;
-        let total_flops_ob = 2.0 * i.pow(2) as f64 * rc_ob;
+        let total_flops_intel = 2.0 * i.pow(2) as f64 * rc_intel;
 
-        let (gflops, gflops_ob, latency, latency_ob, cache_eff, ns_per_flop) = MetricSet::derive(
-            rc,
-            rc_ob,
-            target_time,
-            total_flops,
-            total_flops_ob,
-            working_kbyte,
-        );
+        let (gflops, gflops_intel, latency, latency_intel, cache_eff, ns_per_flop) =
+            MetricSet::derive(
+                rc,
+                rc_intel,
+                toc,
+                toc_intel,
+                total_flops,
+                total_flops_intel,
+                working_kbyte,
+            );
 
-        let gflops_rel = (gflops - gflops_ob) / gflops_ob * 100.0;
-        let latency_rel = (latency - latency_ob) / latency_ob * 100.0;
+        let gflops_rel = (gflops - gflops_intel) / gflops_intel * 100.0;
+        let latency_rel = (latency - latency_intel) / latency_intel * 100.0;
 
         metrics_collector.collect(
             ((i as f64).log10(), gflops),
@@ -555,7 +684,6 @@ fn bench_gemv_t(size_sample: &[usize], target_time: f64, plot_path: &Path) {
     }
 }
 
-// TODO: stuck!!! fix later
 fn bench_gemm_f_f(size_sample: &[usize], target_time: f64, plot_path: &Path) {
     let mut noise = Noise::init();
     let mut metrics: Vec<BenchMetrics> = Vec::new();
@@ -567,74 +695,126 @@ fn bench_gemm_f_f(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         let mut y1_buf = vec![0.0f32; i * i];
         let mut y2_buf = vec![0.0f32; i * i];
 
+        noise.fill_f32(&mut a_buf);
+        noise.fill_f32(&mut x_buf);
+
         black_box(&mut a_buf);
         black_box(&mut x_buf);
         black_box(&mut y1_buf);
         black_box(&mut y2_buf);
 
-        noise.fill_f32(&mut a_buf);
-        noise.fill_f32(&mut x_buf);
+        let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
+            y1_buf.fill(1.0);
+            let (rc, toc) = run_bench(
+                || {
+                    gemm(
+                        i, // m
+                        i, // n
+                        i, // k
+                        5.0,
+                        &a_buf, // matrix A
+                        i,      // lda
+                        &x_buf, // matrix B
+                        i,      // ldb
+                        7.0,
+                        &mut y1_buf, // result C
+                        i,           // ldc
+                        false,
+                        false,
+                    );
+                },
+                target_time,
+            );
 
-        y2_buf.fill(1.0);
-        let rc = run_bench(
-            || {
-                gemm(
-                    i, // m
-                    i, // n
-                    i, // k
-                    5.0,
-                    &a_buf, // matrix A
-                    i,      // lda
-                    &x_buf, // matrix B
-                    i,      // ldb
-                    7.0,
-                    &mut y1_buf, // result C
-                    i,           // ldc
-                    false,
-                    false,
-                );
-            },
-            target_time,
-        );
+            y2_buf.fill(1.0);
+            let (rc_intel, toc_intel) = run_bench(
+                || {
+                    gemm_intel_mkl(
+                        i as i32, // m
+                        i as i32, // n
+                        i as i32, // k
+                        5.0,
+                        &a_buf,   // matrix A
+                        i as i32, // lda
+                        &x_buf,   // matrix B
+                        i as i32, // ldb
+                        7.0,
+                        &mut y2_buf, // result C
+                        i as i32,    // ldc
+                        false,
+                        false,
+                    );
+                },
+                target_time,
+            );
 
-        y2_buf.fill(1.0);
-        let rc_ob = run_bench(
-            || {
-                gemm_ob(
-                    i as i32, // m
-                    i as i32, // n
-                    i as i32, // k
-                    5.0,
-                    &a_buf,   // matrix A
-                    i as i32, // lda
-                    &x_buf,   // matrix B
-                    i as i32, // ldb
-                    7.0,
-                    &mut y2_buf, // result C
-                    i as i32,    // ldc
-                    false,
-                    false,
-                );
-            },
-            target_time,
-        );
+            (rc, rc_intel, toc, toc_intel)
+        } else {
+            y2_buf.fill(1.0);
+            let (rc_intel, toc_intel) = run_bench(
+                || {
+                    gemm_intel_mkl(
+                        i as i32, // m
+                        i as i32, // n
+                        i as i32, // k
+                        5.0,
+                        &a_buf,   // matrix A
+                        i as i32, // lda
+                        &x_buf,   // matrix B
+                        i as i32, // ldb
+                        7.0,
+                        &mut y2_buf, // result C
+                        i as i32,    // ldc
+                        false,
+                        false,
+                    );
+                },
+                target_time,
+            );
+
+            y1_buf.fill(1.0);
+            let (rc, toc) = run_bench(
+                || {
+                    gemm(
+                        i, // m
+                        i, // n
+                        i, // k
+                        5.0,
+                        &a_buf, // matrix A
+                        i,      // lda
+                        &x_buf, // matrix B
+                        i,      // ldb
+                        7.0,
+                        &mut y1_buf, // result C
+                        i,           // ldc
+                        false,
+                        false,
+                    );
+                },
+                target_time,
+            );
+
+            (rc, rc_intel, toc, toc_intel)
+        };
 
         let working_kbyte =
             (2.0 * i.pow(2) as f64 + 3.0 * i.pow(2) as f64) * size_of::<f32>() as f64 / 1024.0;
         let total_flops = 2.0 * i.pow(3) as f64 * rc;
-        let total_flops_ob = 2.0 * i.pow(3) as f64 * rc_ob;
+        let total_flops_intel = 2.0 * i.pow(3) as f64 * rc_intel;
 
-        let (gflops, gflops_ob, latency, latency_ob, cache_eff, ns_per_flop) = MetricSet::derive(
-            rc,
-            rc_ob,
-            target_time,
-            total_flops,
-            total_flops_ob,
-            working_kbyte,
-        );
+        let (gflops, gflops_intel, latency, latency_intel, cache_eff, ns_per_flop) =
+            MetricSet::derive(
+                rc,
+                rc_intel,
+                toc,
+                toc_intel,
+                total_flops,
+                total_flops_intel,
+                working_kbyte,
+            );
 
-        let gflops_rel = (gflops - gflops_ob) / gflops_ob * 100.0;
-        let latency_rel = (latency - latency_ob) / latency_ob * 100.0;
+        let gflops_rel = (gflops - gflops_intel) / gflops_intel * 100.0;
+        let latency_rel = (latency - latency_intel) / latency_intel * 100.0;
 
         metrics_collector.collect(
             ((i as f64).log10(), gflops),
@@ -643,6 +823,11 @@ fn bench_gemm_f_f(size_sample: &[usize], target_time: f64, plot_path: &Path) {
             (working_kbyte.log10(), ns_per_flop),
             ((i as f64).log10(), gflops_rel),
             ((i as f64).log10(), latency_rel),
+        );
+
+        println!(
+            "S: {}, R: {}, Gflops: {}, Gflops_rel: {}%, Latency_rel: {}%, Cache fit: {} %",
+            i, rc, gflops, gflops_rel, latency_rel, cache_eff
         );
 
         noise.fill_f32(&mut a_buf);
@@ -701,14 +886,14 @@ fn plot_bench(bench_metrics: &[BenchMetrics], output: &Path) -> Result<(), Box<d
                     "log(Size)",
                     "GFLOPS Ratio (%)",
                     MAGENTA,
-                    "GFLOPS(+-Rel) w/OpenBlas",
+                    "GFLOPS(+-Rel) w/IntelMKL",
                     points.as_slice(),
                 ),
                 Some(BenchMetrics::CompareLatency(points)) => (
                     "log(Size)",
                     "Latency Ratio (%)",
                     YELLOW,
-                    "Latency(+-Rel) w/OpenBlas",
+                    "Latency(+-Rel) w/IntelMKL",
                     points.as_slice(),
                 ),
                 None => ("X", "Y", WHITE, "N/A", &[]),

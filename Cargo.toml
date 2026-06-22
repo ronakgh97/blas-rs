@@ -36,6 +36,4 @@ rand_xoshiro = "0.8.1" # apparently faster than my impl of splitmix64 :(
 [dev-dependencies]
 plotters = "0.3.7" # for plotting benchmarks
 blas = "0.23.0" # for BLAS bindings, used in the reference implementation and benchmarks
-# externel deps, make sure to have OpenBLAS installed on your system and properly linked, or it won't compile
-# check readme for instructions
-openblas-src = { version = "0.10.16", features = ["system"] }
+intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"]}
