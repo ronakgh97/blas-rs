@@ -1,25 +1,31 @@
 use crate::BenchMetrics;
 use crate::utils::MAX_L1L2_KB;
-use std::hint::black_box;
 use std::time::Instant;
 
-#[inline]
+#[inline(always)]
 /// Bench a function `f` by running it repeatedly until `target_time` seconds have elapsed,
-/// and returning the total number of runs completed and the actual elapsed time.
+/// and returning the total number of runs and the actual elapsed time.
 pub fn run_bench<F>(mut f: F, target_time: f64) -> (f64, f64)
 where
     F: FnMut(),
 {
+    //tiny warmup
+    {
+        let start = Instant::now();
+        while start.elapsed().as_secs_f64() < 1.0 {
+            f();
+        }
+    }
+
+    let mut runs: u64 = 0;
     let start = Instant::now();
-    let mut runs = 0.0;
 
     while start.elapsed().as_secs_f64() < target_time {
         f();
-        black_box(());
-        runs += 1.0;
+        runs += 1;
     }
 
-    (runs, start.elapsed().as_secs_f64())
+    (runs as f64, start.elapsed().as_secs_f64())
 }
 
 pub struct MetricSet {

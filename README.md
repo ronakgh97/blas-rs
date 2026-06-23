@@ -35,10 +35,10 @@ build using `RUSTFLAGS target-cpu=x86-64-v3`, otherwise rustc will throw error.
 
 Install [Intel oneAPI Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/oneapi-toolkit-download.html?packages=oneapi-toolkit&oneapi-toolkit-os=linux&oneapi-lin=offline)
 then copy the `.dll` or `.so` into the project root:
-windows - `Copy-Item "C:\Program Files (x86)\Intel\oneAPI\compiler\2026.0\bin\libiomp5md.dll" .`
-linux - `cp /opt/intel/oneapi/compiler/latest/lib/libiomp5.so .`
+- windows > `Copy-Item "C:\Program Files (x86)\Intel\oneAPI\compiler\2026.0\bin\libiomp5md.dll" .`
+- linux > `cp /opt/intel/oneapi/compiler/latest/lib/libiomp5.so .`
 
-> all are single threaded!!! ran on i7 14650hx, rust 1.96.0.
+> All are single threaded, ran on i7 14650hx, rust 1.96.0.
 
 **axpy**
 ![plot](bench/plot/axpy.png)

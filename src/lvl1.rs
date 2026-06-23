@@ -7,7 +7,8 @@ use std::arch::x86_64::{
     _mm256_blendv_ps, _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmp_ps, _mm256_fmadd_ps,
     _mm256_hadd_ps, _mm256_load_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_permute_ps,
     _mm256_set_epi32, _mm256_set1_epi32, _mm256_set1_ps, _mm256_setzero_ps, _mm256_setzero_si256,
-    _mm256_shuffle_epi32, _mm256_storeu_ps, _mm256_storeu_si256,
+    _mm256_shuffle_epi32, _mm256_storeu_ps, _mm256_storeu_si256, _mm256_stream_ps,
+    _mm256_zeroupper,
 };
 use std::ptr::{copy_nonoverlapping, swap_nonoverlapping};
 // TODO: x[ix], x[ix + incx], x[ix + 2*incx], ..., x[ix + (n-1)*incx]
@@ -1058,7 +1059,7 @@ pub fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
                 let x2 = _mm256_loadu_ps(x_ptr.add(i + 16));
                 let x3 = _mm256_loadu_ps(x_ptr.add(i + 24));
 
-                // I don't think, this will do what I intended too
+                // I don't think, this will do what I intended to
                 sum = _mm256_fmadd_ps(x0, x0, sum);
                 sum = _mm256_fmadd_ps(x1, x1, sum);
                 sum = _mm256_fmadd_ps(x2, x2, sum);
@@ -1387,7 +1388,163 @@ pub fn i_amax(n: usize, x: &[f32], incx: i32) -> usize {
 
                 // Blend values and indices using the mask,
                 // take compute cmp mask for each lane, check against abs lane,
-                // keep either the old max or update with new value and index
+                // keep either the old max or update with new value and index.
+                // For example
+                //  old val = [5.0, 3.0, 6.0, 2.0, 4.0, 1.0, 7.0, 0.5], new val = [4.0, 8.0, 5.0, 1.0, 3.0, 2.0, 6.0, 9.0]
+                //  cmp mask = [0, 0xFFFFFFFF, 0, 0, 0, 0, 0, 0xFFFFFFFF]
+                //  result = [5.0, 8.0, 6.0, 2.0, 4.0, 1.0, 7.0, 9.0]
+                // Same goes for indices
+                la_vals0 = _mm256_blendv_ps(la_vals0, xabs0, cmp0);
+                la_idxs0 = _mm256_blendv_epi8(la_idxs0, idx0, _mm256_castps_si256(cmp0));
+
+                la_vals1 = _mm256_blendv_ps(la_vals1, xabs1, cmp1);
+                la_idxs1 = _mm256_blendv_epi8(la_idxs1, idx1, _mm256_castps_si256(cmp1));
+
+                la_vals2 = _mm256_blendv_ps(la_vals2, xabs2, cmp2);
+                la_idxs2 = _mm256_blendv_epi8(la_idxs2, idx2, _mm256_castps_si256(cmp2));
+
+                la_vals3 = _mm256_blendv_ps(la_vals3, xabs3, cmp3);
+                la_idxs3 = _mm256_blendv_epi8(la_idxs3, idx3, _mm256_castps_si256(cmp3));
+
+                i += 32;
+
+                _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_NTA);
+            }
+
+            let cmp01 = _mm256_cmp_ps(la_vals1, la_vals0, _CMP_GT_OQ);
+            la_vals0 = _mm256_blendv_ps(la_vals0, la_vals1, cmp01);
+            la_idxs0 = _mm256_blendv_epi8(la_idxs0, la_idxs1, _mm256_castps_si256(cmp01));
+
+            let cmp02 = _mm256_cmp_ps(la_vals2, la_vals0, _CMP_GT_OQ);
+            la_vals0 = _mm256_blendv_ps(la_vals0, la_vals2, cmp02);
+            la_idxs0 = _mm256_blendv_epi8(la_idxs0, la_idxs2, _mm256_castps_si256(cmp02));
+
+            let cmp03 = _mm256_cmp_ps(la_vals3, la_vals0, _CMP_GT_OQ);
+            la_vals0 = _mm256_blendv_ps(la_vals0, la_vals3, cmp03);
+            la_idxs0 = _mm256_blendv_epi8(la_idxs0, la_idxs3, _mm256_castps_si256(cmp03));
+
+            while i + 8 <= n {
+                let x0 = _mm256_loadu_ps(x_ptr.add(i));
+                let abs0 = _mm256_and_ps(x0, mask);
+                let idx0 = _mm256_add_epi32(base_idx, _mm256_set1_epi32(i as i32));
+
+                let cmp0 = _mm256_cmp_ps(abs0, la_vals0, _CMP_GT_OQ);
+                la_vals0 = _mm256_blendv_ps(la_vals0, abs0, cmp0);
+                la_idxs0 = _mm256_blendv_epi8(la_idxs0, idx0, _mm256_castps_si256(cmp0));
+
+                i += 8;
+            }
+
+            let mut tmp_vals = [0.0f32; 8];
+            let mut tmp_idxs = [0i32; 8];
+            // Store the registers to temporary arrays for reduction
+            _mm256_storeu_ps(tmp_vals.as_mut_ptr(), la_vals0);
+            _mm256_storeu_si256(tmp_idxs.as_mut_ptr() as *mut __m256i, la_idxs0);
+
+            let mut la_val = -1.0f32;
+            let mut la_idx = 0usize;
+
+            for j in 0..8 {
+                // Check if the current value is greater than the max found so far, or if it's a tie,
+                // check if the index is smaller (to ensure we return the first occurrence of the max value)
+                if tmp_vals[j] > la_val
+                    || (tmp_vals[j] == la_val && (tmp_idxs[j] as usize) < la_idx)
+                {
+                    la_val = tmp_vals[j];
+                    la_idx = tmp_idxs[j] as usize;
+                } // On tie, we ignore the new index since
+                // we want the first occurrence (lower index) of the max value
+            }
+
+            while i < n {
+                let val = (*x_ptr.add(i)).abs();
+                if val > la_val || (val == la_val && i < la_idx) {
+                    la_val = val;
+                    la_idx = i;
+                }
+                i += 1;
+            }
+
+            la_idx
+        }
+    } else {
+        let incx = incx as isize;
+        let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
+        let x_ptr = x.as_ptr();
+        let mut la_idx: usize = 0;
+        let mut la_val = -f32::INFINITY;
+        for _ in 0..n {
+            let val = unsafe { (*x_ptr.offset(ix)).abs() };
+            if val > la_val {
+                la_val = val;
+                la_idx = ix as usize;
+            }
+            ix += incx;
+        }
+        la_idx
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::missing_safety_doc)]
+/// The iamax routines return an index i such that x\[i\] has the maximum absolute value of all elements in vector x.
+/// [ref](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/iamax.html) for more details
+pub fn i_amax_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
+    if incx == 1 {
+        unsafe {
+            let x_ptr = x.as_ptr();
+
+            // Create mask [0x7fffffff, 0x7fffffff, ...8 times]
+            let mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff));
+
+            let base_idx = _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+
+            // Init max trackers to -inf so any valid absolute value overwrites it,
+            // I hope this doesn't cause any issues later :(
+            let mut la_vals0 = _mm256_set1_ps(-f32::INFINITY);
+            let mut la_idxs0 = _mm256_setzero_si256();
+
+            let mut la_vals1 = _mm256_set1_ps(-f32::INFINITY);
+            let mut la_idxs1 = _mm256_setzero_si256();
+
+            let mut la_vals2 = _mm256_set1_ps(-f32::INFINITY);
+            let mut la_idxs2 = _mm256_setzero_si256();
+
+            let mut la_vals3 = _mm256_set1_ps(-f32::INFINITY);
+            let mut la_idxs3 = _mm256_setzero_si256();
+
+            let mut i = 0usize;
+
+            while i + 32 <= n {
+                // Load Values
+                let x0 = _mm256_loadu_ps(x_ptr.add(i));
+                let x1 = _mm256_loadu_ps(x_ptr.add(i + 8));
+                let x2 = _mm256_loadu_ps(x_ptr.add(i + 16));
+                let x3 = _mm256_loadu_ps(x_ptr.add(i + 24));
+
+                // Compute absolute values using AND with mask
+                let xabs0 = _mm256_and_ps(x0, mask);
+                let xabs1 = _mm256_and_ps(x1, mask);
+                let xabs2 = _mm256_and_ps(x2, mask);
+                let xabs3 = _mm256_and_ps(x3, mask);
+
+                // Create index vectors for current chunks by adding 'i' to base index
+                // Each contains [i, i+1, i+2, i+3, i+4, i+5, i+6, i+7]...
+                let idx0 = _mm256_add_epi32(base_idx, _mm256_set1_epi32(i as i32)); // TODO: Broadcast overhead
+                let idx1 = _mm256_add_epi32(base_idx, _mm256_set1_epi32((i + 8) as i32));
+                let idx2 = _mm256_add_epi32(base_idx, _mm256_set1_epi32((i + 16) as i32));
+                let idx3 = _mm256_add_epi32(base_idx, _mm256_set1_epi32((i + 24) as i32));
+
+                // Create comparison masks > current max for each lane
+                // Either returns 0xFFFFFFFF (true) or 0x00000000 (false) for each lane
+                let cmp0 = _mm256_cmp_ps(xabs0, la_vals0, _CMP_GT_OQ);
+                let cmp1 = _mm256_cmp_ps(xabs1, la_vals1, _CMP_GT_OQ);
+                let cmp2 = _mm256_cmp_ps(xabs2, la_vals2, _CMP_GT_OQ);
+                let cmp3 = _mm256_cmp_ps(xabs3, la_vals3, _CMP_GT_OQ);
+
+                // Blend values and indices using the mask,
+                // take compute cmp mask for each lane, check against abs lane,
+                // keep either the old max or update with new value and index.
                 // For example
                 //  old val = [5.0, 3.0, 6.0, 2.0, 4.0, 1.0, 7.0, 0.5], new val = [4.0, 8.0, 5.0, 1.0, 3.0, 2.0, 6.0, 9.0]
                 //  cmp mask = [0, 0xFFFFFFFF, 0, 0, 0, 0, 0, 0xFFFFFFFF]
@@ -1551,7 +1708,160 @@ pub fn i_amin(n: usize, x: &[f32], incx: i32) -> usize {
 
                 // Blend values and indices using the mask,
                 // take compute cmp mask for each lane, check against abs lane,
-                // keep either the old max or update with new value and index
+                // keep either the old max or update with new value and index.
+                // For example
+                //  old val = [5.0, 3.0, 6.0, 2.0, 4.0, 1.0, 7.0, 0.5], new val = [4.0, 8.0, 5.0, 1.0, 3.0, 2.0, 6.0, 9.0]
+                //  cmp mask = [0, 0xFFFFFFFF, 0, 0, 0, 0, 0, 0xFFFFFFFF]
+                //  result = [5.0, 8.0, 6.0, 2.0, 4.0, 1.0, 7.0, 9.0]
+                // Same goes for indices
+                sm_vals0 = _mm256_blendv_ps(sm_vals0, xabs0, cmp0);
+                sm_idxs0 = _mm256_blendv_epi8(sm_idxs0, idx0, _mm256_castps_si256(cmp0));
+
+                sm_vals1 = _mm256_blendv_ps(sm_vals1, xabs1, cmp1);
+                sm_idxs1 = _mm256_blendv_epi8(sm_idxs1, idx1, _mm256_castps_si256(cmp1));
+
+                sm_vals2 = _mm256_blendv_ps(sm_vals2, xabs2, cmp2);
+                sm_idxs2 = _mm256_blendv_epi8(sm_idxs2, idx2, _mm256_castps_si256(cmp2));
+
+                sm_vals3 = _mm256_blendv_ps(sm_vals3, xabs3, cmp3);
+                sm_idxs3 = _mm256_blendv_epi8(sm_idxs3, idx3, _mm256_castps_si256(cmp3));
+
+                i += 32;
+
+                _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_NTA);
+            }
+
+            let cmp01 = _mm256_cmp_ps(sm_vals1, sm_vals0, _CMP_LT_OQ);
+            sm_vals0 = _mm256_blendv_ps(sm_vals0, sm_vals1, cmp01);
+            sm_idxs0 = _mm256_blendv_epi8(sm_idxs0, sm_idxs1, _mm256_castps_si256(cmp01));
+
+            let cmp02 = _mm256_cmp_ps(sm_vals2, sm_vals0, _CMP_LT_OQ);
+            sm_vals0 = _mm256_blendv_ps(sm_vals0, sm_vals2, cmp02);
+            sm_idxs0 = _mm256_blendv_epi8(sm_idxs0, sm_idxs2, _mm256_castps_si256(cmp02));
+
+            let cmp03 = _mm256_cmp_ps(sm_vals3, sm_vals0, _CMP_LT_OQ);
+            sm_vals0 = _mm256_blendv_ps(sm_vals0, sm_vals3, cmp03);
+            sm_idxs0 = _mm256_blendv_epi8(sm_idxs0, sm_idxs3, _mm256_castps_si256(cmp03));
+
+            while i + 8 <= n {
+                let x0 = _mm256_loadu_ps(x_ptr.add(i));
+                let abs0 = _mm256_and_ps(x0, mask);
+                let idx0 = _mm256_add_epi32(base_idx, _mm256_set1_epi32(i as i32));
+
+                let cmp0 = _mm256_cmp_ps(abs0, sm_vals0, _CMP_LT_OQ);
+                sm_vals0 = _mm256_blendv_ps(sm_vals0, abs0, cmp0);
+                sm_idxs0 = _mm256_blendv_epi8(sm_idxs0, idx0, _mm256_castps_si256(cmp0));
+
+                i += 8;
+            }
+
+            let mut tmp_vals = [0.0f32; 8];
+            let mut tmp_idxs = [0i32; 8];
+            // Store the SIMD registers to temporary arrays for reduction
+            _mm256_storeu_ps(tmp_vals.as_mut_ptr(), sm_vals0);
+            _mm256_storeu_si256(tmp_idxs.as_mut_ptr() as *mut __m256i, sm_idxs0);
+
+            let mut sm_val = f32::INFINITY;
+            let mut sm_idx = 0usize;
+
+            for j in 0..8 {
+                // Check if the current value is greater than the max found so far, or if it's a tie,
+                // check if the index is smaller (to ensure we return the first occurrence of the max value)
+                if tmp_vals[j] < sm_val
+                    || (tmp_vals[j] == sm_val && (tmp_idxs[j] as usize) < sm_idx)
+                {
+                    sm_val = tmp_vals[j];
+                    sm_idx = tmp_idxs[j] as usize;
+                } // On tie, we ignore the new index since
+                // we want the first occurrence (lower index) of the max value
+            }
+
+            while i < n {
+                let val = (*x_ptr.add(i)).abs();
+                if val < sm_val || (val == sm_val && i < sm_idx) {
+                    sm_val = val;
+                    sm_idx = i;
+                }
+                i += 1;
+            }
+
+            sm_idx
+        }
+    } else {
+        let incx = incx as isize;
+        let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
+        let x_ptr = x.as_ptr();
+        let mut sm_idx: usize = 0;
+        let mut sm_val = f32::INFINITY;
+        for _ in 0..n {
+            let val = unsafe { (*x_ptr.offset(ix)).abs() };
+            if val < sm_val {
+                sm_val = val;
+                sm_idx = ix as usize;
+            }
+            ix += incx;
+        }
+        sm_idx
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::missing_safety_doc)]
+/// The iamin routines return an index i such that x\[i\] has the minimum absolute value of all elements in vector x.
+/// [ref](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/iamin.html) for more details
+pub fn i_amin_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
+    if incx == 1 {
+        unsafe {
+            let x_ptr = x.as_ptr();
+
+            // Create mask [0x7fffffff, 0x7fffffff, ...8 times]
+            let mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff));
+
+            let base_idx = _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+
+            // Init min trackers to +inf so any valid absolute value overwrites it,
+            let mut sm_vals0 = _mm256_set1_ps(f32::INFINITY);
+            let mut sm_vals1 = _mm256_set1_ps(f32::INFINITY);
+            let mut sm_vals2 = _mm256_set1_ps(f32::INFINITY);
+            let mut sm_vals3 = _mm256_set1_ps(f32::INFINITY);
+
+            let mut sm_idxs0 = _mm256_setzero_si256();
+            let mut sm_idxs1 = _mm256_setzero_si256();
+            let mut sm_idxs2 = _mm256_setzero_si256();
+            let mut sm_idxs3 = _mm256_setzero_si256();
+
+            let mut i = 0usize;
+
+            while i + 32 <= n {
+                // Load Values
+                let x0 = _mm256_loadu_ps(x_ptr.add(i));
+                let x1 = _mm256_loadu_ps(x_ptr.add(i + 8));
+                let x2 = _mm256_loadu_ps(x_ptr.add(i + 16));
+                let x3 = _mm256_loadu_ps(x_ptr.add(i + 24));
+
+                // Compute absolute values using AND with mask
+                let xabs0 = _mm256_and_ps(x0, mask);
+                let xabs1 = _mm256_and_ps(x1, mask);
+                let xabs2 = _mm256_and_ps(x2, mask);
+                let xabs3 = _mm256_and_ps(x3, mask);
+
+                // Create index vectors for current chunks by adding 'i' to base index
+                // Each contains [i, i+1, i+2, i+3, i+4, i+5, i+6, i+7]...
+                let idx0 = _mm256_add_epi32(base_idx, _mm256_set1_epi32(i as i32)); // TODO: Broadcast overhead
+                let idx1 = _mm256_add_epi32(base_idx, _mm256_set1_epi32((i + 8) as i32));
+                let idx2 = _mm256_add_epi32(base_idx, _mm256_set1_epi32((i + 16) as i32));
+                let idx3 = _mm256_add_epi32(base_idx, _mm256_set1_epi32((i + 24) as i32));
+
+                // Create comparison masks < current min for each lane
+                // Either returns 0xFFFFFFFF (true) or 0x00000000 (false) for each lane
+                let cmp0 = _mm256_cmp_ps(xabs0, sm_vals0, _CMP_LT_OQ);
+                let cmp1 = _mm256_cmp_ps(xabs1, sm_vals1, _CMP_LT_OQ);
+                let cmp2 = _mm256_cmp_ps(xabs2, sm_vals2, _CMP_LT_OQ);
+                let cmp3 = _mm256_cmp_ps(xabs3, sm_vals3, _CMP_LT_OQ);
+
+                // Blend values and indices using the mask,
+                // take compute cmp mask for each lane, check against abs lane,
+                // keep either the old max or update with new value and index.
                 // For example
                 //  old val = [5.0, 3.0, 6.0, 2.0, 4.0, 1.0, 7.0, 0.5], new val = [4.0, 8.0, 5.0, 1.0, 3.0, 2.0, 6.0, 9.0]
                 //  cmp mask = [0, 0xFFFFFFFF, 0, 0, 0, 0, 0, 0xFFFFFFFF]

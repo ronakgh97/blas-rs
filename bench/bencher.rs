@@ -8,8 +8,6 @@ use blas_rs::lvl2::gemv;
 use blas_rs::lvl3::gemm;
 use blas_rs::utils::*;
 use std::error::Error;
-#[allow(unused)]
-use std::f64::consts::PI;
 use std::f64::consts::TAU;
 use std::hint::black_box;
 use std::path::Path;
@@ -36,6 +34,10 @@ fn warmup(r: usize, s: usize) {
     // Warmup phase
     for i in 0..r {
         {
+            axpy(s, (i % 7) as f32, &y, 1, &mut vec![0.0f32; s], 1);
+
+            dot(s, &y, 1, &vec![0.0f32; s], 1);
+
             gemv(
                 s,
                 s,
@@ -63,9 +65,22 @@ fn warmup(r: usize, s: usize) {
                 1,
                 true,
             );
-            axpy(s, (i % 7) as f32, &y, 1, &mut vec![0.0f32; s], 1);
 
-            dot(s, &y, 1, &vec![0.0f32; s], 1);
+            gemm(
+                s,
+                s,
+                s,
+                (i % 3) as f32,
+                &a,
+                s,
+                &a,
+                s,
+                (i % 5) as f32,
+                &mut vec![0.0f32; s * s],
+                s,
+                false,
+                false,
+            );
         }
 
         noise.fill_f32(&mut a);
@@ -73,6 +88,10 @@ fn warmup(r: usize, s: usize) {
         y.fill(1.0);
 
         {
+            axpy_intel_mkl(s as i32, (i % 7) as f32, &y, 1, &mut vec![0.0f32; s], 1);
+
+            dot_intel_mkl(s as i32, &y, 1, &vec![0.0f32; s], 1);
+
             gemv_intel_mkl(
                 s as i32,
                 s as i32,
@@ -101,9 +120,21 @@ fn warmup(r: usize, s: usize) {
                 true,
             );
 
-            axpy_intel_mkl(s as i32, (i % 7) as f32, &y, 1, &mut vec![0.0f32; s], 1);
-
-            dot_intel_mkl(s as i32, &y, 1, &vec![0.0f32; s], 1);
+            gemm_intel_mkl(
+                s as i32,
+                s as i32,
+                s as i32,
+                (i % 3) as f32,
+                &a,
+                s as i32,
+                &a,
+                s as i32,
+                (i % 5) as f32,
+                &mut vec![0.0f32; s * s],
+                s as i32,
+                false,
+                false,
+            );
         }
 
         noise.fill_f32(&mut a);
@@ -123,6 +154,7 @@ enum BenchMetrics {
     CompareLatency(Vec<(f64, f64)>),
 }
 
+// TODO: use clap, this is getting big
 fn main() {
     unsafe {
         std::env::set_var("MKL_NUM_THREADS", "1");
@@ -143,13 +175,20 @@ fn main() {
         .unwrap_or_else(|| "all".to_string())
         .to_lowercase();
 
+    // let compare: bool = std::env::args()
+    //     .nth(2)
+    //     .unwrap_or_else(|| "false".to_string())
+    //     .parse()
+    //     .unwrap_or(false);
+
     let kernels: Vec<&str> = if kernel == "all" {
         vec!["axpy", "dot", "gemv", "gemv_t", "gemm"] // order
     } else {
         kernel.split(',').collect()
     };
 
-    warmup(64, 4096);
+    println!("Heating up!!!");
+    warmup(64, 2048);
 
     for k in kernels {
         match k.trim() {
@@ -194,9 +233,6 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         let mut y2_buf = vec![0.0f32; i];
 
         noise.fill_f32(&mut x_buf);
-        black_box(&mut x_buf);
-        black_box(&mut y1_buf);
-        black_box(&mut y1_buf);
 
         let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
             y1_buf.fill(1.0);
@@ -256,7 +292,7 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         println!(
-            "S: {}, R: {}, Gflops: {}, Gflops_rel: {}%, Latency_rel: {}%, Cache fit: {} %",
+            "S: {}, R: {}, Gflops: {}, Gflops_w/IntelMKL: {}%, Latency_w/IntelMKL: {}%, Cache fit: {} %",
             i, rc, gflops, gflops_rel, latency_rel, cache_eff
         );
 
@@ -286,8 +322,6 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         let mut y2_buf = vec![0.0f32; i];
 
         noise.fill_f32(&mut x_buf);
-        black_box(&mut y1_buf);
-        black_box(&mut y2_buf);
 
         let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
             y1_buf.fill(1.0);
@@ -355,10 +389,9 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         println!(
-            "S: {}, R: {}, Gflops: {}, Gflops_rel: {}%, Latency_rel: {}%, Cache fit: {} %",
+            "S: {}, R: {}, Gflops: {}, Gflops_w/IntelMKL: {}%, Latency_w/IntelMKL: {}%, Cache fit: {} %",
             i, rc, gflops, gflops_rel, latency_rel, cache_eff
         );
-
         // reset, avoid hot cache possibility, we don't do 'TRUST ME BRO' BENCH
         noise.fill_f32(&mut x_buf);
         noise.fill_f32(&mut y1_buf);
@@ -388,11 +421,6 @@ fn bench_gemv(size_sample: &[usize], target_time: f64, plot_path: &Path) {
 
         noise.fill_f32(&mut a_buf);
         noise.fill_f32(&mut x_buf);
-
-        black_box(&mut a_buf);
-        black_box(&mut x_buf);
-        black_box(&mut y1_buf);
-        black_box(&mut y2_buf);
 
         let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
             y1_buf.fill(1.0);
@@ -509,7 +537,7 @@ fn bench_gemv(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         println!(
-            "S: {}, R: {}, Gflops: {}, Gflops_rel: {}%, Latency_rel: {}%, Cache fit: {} %",
+            "S: {}, R: {}, Gflops: {}, Gflops_w/IntelMKL: {}%, Latency_w/IntelMKL: {}%, Cache fit: {} %",
             i, rc, gflops, gflops_rel, latency_rel, cache_eff
         );
 
@@ -543,11 +571,6 @@ fn bench_gemv_t(size_sample: &[usize], target_time: f64, plot_path: &Path) {
 
         noise.fill_f32(&mut a_buf);
         noise.fill_f32(&mut x_buf);
-
-        black_box(&mut a_buf);
-        black_box(&mut x_buf);
-        black_box(&mut y1_buf);
-        black_box(&mut y2_buf);
 
         let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
             y1_buf.fill(1.0);
@@ -663,7 +686,7 @@ fn bench_gemv_t(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         println!(
-            "S: {}, R: {}, Gflops: {}, Gflops_rel: {}%, Latency_rel: {}%, Cache fit: {} %",
+            "S: {}, R: {}, Gflops: {}, Gflops_w/IntelMKL: {}%, Latency_w/IntelMKL: {}%, Cache fit: {} %",
             i, rc, gflops, gflops_rel, latency_rel, cache_eff
         );
 
@@ -697,11 +720,6 @@ fn bench_gemm_f_f(size_sample: &[usize], target_time: f64, plot_path: &Path) {
 
         noise.fill_f32(&mut a_buf);
         noise.fill_f32(&mut x_buf);
-
-        black_box(&mut a_buf);
-        black_box(&mut x_buf);
-        black_box(&mut y1_buf);
-        black_box(&mut y2_buf);
 
         let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
             y1_buf.fill(1.0);
@@ -826,7 +844,7 @@ fn bench_gemm_f_f(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         println!(
-            "S: {}, R: {}, Gflops: {}, Gflops_rel: {}%, Latency_rel: {}%, Cache fit: {} %",
+            "S: {}, R: {}, Gflops: {}, Gflops_w/IntelMKL: {}%, Latency_w/IntelMKL: {}%, Cache fit: {} %",
             i, rc, gflops, gflops_rel, latency_rel, cache_eff
         );
 

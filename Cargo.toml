@@ -7,7 +7,7 @@ description = "Experimental F32 BLAS & Intel Math kernels library for x86_64 cpu
 license = "MIT"
 repository = "https://github.com/ronakgh97/blas-rs"
 readme = "README.md"
-categories = ["mathematics", "rust-patterns", "hardware-support", "science"]
+categories = ["mathematics", "algorithms", "memory-management", "science"]
 keywords = ["blas", "simd", "math", "high-performance", "x86_64"]
 
 [lib]
@@ -24,7 +24,7 @@ name = "asm_runner"
 path = "asm/runner.rs"
 
 [profile.release]
-opt-level = "z"
+opt-level = 3
 codegen-units = 1
 lto = "fat"
 
@@ -36,4 +36,4 @@ rand_xoshiro = "0.8.1" # apparently faster than my impl of splitmix64 :(
 [dev-dependencies]
 plotters = "0.3.7" # for plotting benchmarks
 blas = "0.23.0" # for BLAS bindings, used in the reference implementation and benchmarks
-intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"]}
+intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
