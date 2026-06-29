@@ -1,9 +1,8 @@
 use crate::utils::reduce_f32;
-use std::arch::x86_64::_MM_HINT_T0;
 #[allow(unused_imports)]
 use std::arch::x86_64::{
-    __m256i, _CMP_GT_OQ, _CMP_LT_OQ, _MM_HINT_ET0, _MM_HINT_NTA, _MM_HINT_T1, _MM_HINT_T2,
-    _mm_prefetch, _mm256_add_epi32, _mm256_add_ps, _mm256_and_ps, _mm256_blendv_epi8,
+    __m256i, _CMP_GT_OQ, _CMP_LT_OQ, _MM_HINT_ET0, _MM_HINT_NTA, _MM_HINT_T0, _MM_HINT_T1,
+    _MM_HINT_T2, _mm_prefetch, _mm256_add_epi32, _mm256_add_ps, _mm256_and_ps, _mm256_blendv_epi8,
     _mm256_blendv_ps, _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmp_ps, _mm256_fmadd_ps,
     _mm256_hadd_ps, _mm256_load_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_permute_ps,
     _mm256_set_epi32, _mm256_set1_epi32, _mm256_set1_ps, _mm256_setzero_ps, _mm256_setzero_si256,
@@ -74,8 +73,8 @@ pub fn axpy(n: usize, alpha: f32, x: &[f32], incx: i32, y: &mut [f32], incy: i32
                 i += 32;
 
                 {
-                    _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(y_ptr.add(i + 256) as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
                 }
             }
 
@@ -192,8 +191,8 @@ pub unsafe fn axpy_unsafe(n: usize, alpha: f32, x: &[f32], incx: i32, y: &mut [f
                 i += 32;
 
                 {
-                    _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(y_ptr.add(i + 256) as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
                 }
             }
 

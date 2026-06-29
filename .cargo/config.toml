@@ -1,5 +1,6 @@
 [alias]
 br = "build --all-targets --release"
+# TODO: bench bins are causing issues with nextest
 tp = "nextest run --all-targets --no-fail-fast --release --test-threads 18"
 ts = "nextest run --all-targets --no-capture --no-fail-fast --release"
 

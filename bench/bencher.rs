@@ -147,8 +147,8 @@ enum BenchMetrics {
     Gflops(Vec<(f64, f64)>),
     Latency(Vec<(f64, f64)>),
     CacheEfficiency(Vec<(f64, f64)>), // LLC fit proxy
-    // a bit heuristic, but we can see how much performance cost,
-    // we pay per flop as working set grows, higher means more cache miss
+    // this is heuristic blunt, but we can guess how much performance cost,
+    // we pay per flop as working set grows, higher means more cache miss (hopefully, don't hate me please!)
     CacheMiss(Vec<(f64, f64)>),
     CompareGflops(Vec<(f64, f64)>),
     CompareLatency(Vec<(f64, f64)>),
@@ -227,6 +227,9 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
     let mut bench_metrics: Vec<BenchMetrics> = Vec::new();
     let mut metrics_collector = MetricSet::new();
 
+    println!("| Size | Run | GFLOPS | Gflops_w/IntelMKL | Latency_w/IntelMKL | WSS Cache Fit |");
+    println!("|------|-----|--------|-------------------|--------------------|---------------|");
+
     for &i in size_sample {
         let mut x_buf = vec![0.0f32; i];
         let mut y1_buf = vec![0.0f32; i];
@@ -292,7 +295,7 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         println!(
-            "S: {}, R: {}, Gflops: {}, Gflops_w/IntelMKL: {}%, Latency_w/IntelMKL: {}%, Cache fit: {} %",
+            "| {} | {} | {} | {}% | {}% | {}% |",
             i, rc, gflops, gflops_rel, latency_rel, cache_eff
         );
 
@@ -315,6 +318,9 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
     let mut noise = Noise::init();
     let mut metrics: Vec<BenchMetrics> = Vec::new();
     let mut metrics_collector = MetricSet::new();
+
+    println!("| Size | Run | GFLOPS | Gflops_w/IntelMKL | Latency_w/IntelMKL | WSS Cache Fit |");
+    println!("|------|-----|--------|-------------------|--------------------|---------------|");
 
     for &i in size_sample {
         let mut x_buf = vec![0.0f32; i];
@@ -389,9 +395,10 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         println!(
-            "S: {}, R: {}, Gflops: {}, Gflops_w/IntelMKL: {}%, Latency_w/IntelMKL: {}%, Cache fit: {} %",
+            "| {} | {} | {} | {}% | {}% | {}% |",
             i, rc, gflops, gflops_rel, latency_rel, cache_eff
         );
+
         // reset, avoid hot cache possibility, we don't do 'TRUST ME BRO' BENCH
         noise.fill_f32(&mut x_buf);
         noise.fill_f32(&mut y1_buf);
@@ -412,6 +419,9 @@ fn bench_gemv(size_sample: &[usize], target_time: f64, plot_path: &Path) {
     let mut noise = Noise::init();
     let mut metrics: Vec<BenchMetrics> = Vec::new();
     let mut metrics_collector = MetricSet::new();
+
+    println!("| Size | Run | GFLOPS | Gflops_w/IntelMKL | Latency_w/IntelMKL | WSS Cache Fit |");
+    println!("|------|-----|--------|-------------------|--------------------|---------------|");
 
     for &i in size_sample {
         let mut a_buf = vec![0.0f32; i * i];
@@ -537,7 +547,7 @@ fn bench_gemv(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         println!(
-            "S: {}, R: {}, Gflops: {}, Gflops_w/IntelMKL: {}%, Latency_w/IntelMKL: {}%, Cache fit: {} %",
+            "| {} | {} | {} | {}% | {}% | {}% |",
             i, rc, gflops, gflops_rel, latency_rel, cache_eff
         );
 
@@ -562,6 +572,9 @@ fn bench_gemv_t(size_sample: &[usize], target_time: f64, plot_path: &Path) {
     let mut noise = Noise::init();
     let mut metrics: Vec<BenchMetrics> = Vec::new();
     let mut metrics_collector = MetricSet::new();
+
+    println!("| Size | Run | GFLOPS | Gflops_w/IntelMKL | Latency_w/IntelMKL | WSS Cache Fit |");
+    println!("|------|-----|--------|-------------------|--------------------|---------------|");
 
     for &i in size_sample {
         let mut a_buf = vec![0.0f32; i * i];
@@ -686,7 +699,7 @@ fn bench_gemv_t(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         println!(
-            "S: {}, R: {}, Gflops: {}, Gflops_w/IntelMKL: {}%, Latency_w/IntelMKL: {}%, Cache fit: {} %",
+            "| {} | {} | {} | {}% | {}% | {}% |",
             i, rc, gflops, gflops_rel, latency_rel, cache_eff
         );
 
@@ -711,6 +724,9 @@ fn bench_gemm_f_f(size_sample: &[usize], target_time: f64, plot_path: &Path) {
     let mut noise = Noise::init();
     let mut metrics: Vec<BenchMetrics> = Vec::new();
     let mut metrics_collector = MetricSet::new();
+
+    println!("| Size | Run | GFLOPS | Gflops_w/IntelMKL | Latency_w/IntelMKL | WSS Cache Fit |");
+    println!("|------|-----|--------|-------------------|--------------------|---------------|");
 
     for &i in size_sample {
         let mut a_buf = vec![0.0f32; i * i];
@@ -844,7 +860,7 @@ fn bench_gemm_f_f(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         );
 
         println!(
-            "S: {}, R: {}, Gflops: {}, Gflops_w/IntelMKL: {}%, Latency_w/IntelMKL: {}%, Cache fit: {} %",
+            "| {} | {} | {} | {}% | {}% | {}% |",
             i, rc, gflops, gflops_rel, latency_rel, cache_eff
         );
 
@@ -890,7 +906,7 @@ fn plot_bench(bench_metrics: &[BenchMetrics], output: &Path) -> Result<(), Box<d
                     "log(Size)",
                     "L1+L2 Fit Proxy (%)",
                     GREEN,
-                    "Cache Fit",
+                    "Heuristic Cache Fit",
                     points.as_slice(),
                 ),
                 Some(BenchMetrics::CacheMiss(points)) => (
