@@ -1,3 +1,3 @@
 fn main() {
-    println!("Hello ASM!");
+    unimplemented!("This will implement when compiler stops hating me");
 }

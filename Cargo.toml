@@ -23,10 +23,17 @@ harness = false
 name = "asm_runner"
 path = "asm/runner.rs"
 
+[[bin]]
+name = "vtune"
+path = "bench/vtune.rs"
+harness = false
+
 [profile.release]
-opt-level = 3
+opt-level = 2
 codegen-units = 1
 lto = "fat"
+debug = true
+strip = "none"
 
 [dependencies]
 rand = "0.10.1"
