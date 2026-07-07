@@ -103,8 +103,8 @@ pub fn gemv(
                     let col4 = a_ptr.add((j + 4) * lda);
                     let col5 = a_ptr.add((j + 5) * lda);
 
-                    //_mm_prefetch(a_ptr.add((j + 5) * lda) as *const i8, _MM_HINT_NTA);
-                    //_mm_prefetch(a_ptr.add((j + 12) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 6) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 12) * lda) as *const i8, _MM_HINT_NTA);
 
                     let mut i = 0usize;
 
@@ -369,20 +369,23 @@ pub fn gemv(
             unsafe {
                 let mut j = 0usize;
 
-                // process 4 columns to maximize X vector reuse
-                while j + 3 < n {
+                // process 6 columns to maximize X vector reuse
+                while j + 5 < n {
                     let col0 = a_ptr.add(j * lda);
                     let col1 = a_ptr.add((j + 1) * lda);
                     let col2 = a_ptr.add((j + 2) * lda);
                     let col3 = a_ptr.add((j + 3) * lda);
+                    let col4 = a_ptr.add((j + 4) * lda);
+                    let col5 = a_ptr.add((j + 5) * lda);
+
                     // for prefetch
-                    let col4: *const f32 = a_ptr.add((j + 4) * lda);
-                    let col5: *const f32 = a_ptr.add((j + 5) * lda);
+                    let col6: *const f32 = a_ptr.add((j + 6) * lda);
+                    let col7 = a_ptr.add((j + 7) * lda);
 
-                    _mm_prefetch(a_ptr.add((j + 4) * lda) as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 6) * lda) as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(a_ptr.add((j + 7) * lda) as *const i8, _MM_HINT_T0);
 
-                    // set 4 acc from each column
+                    // set 2 acc from each column
                     let mut sum0_0 = _mm256_setzero_ps();
                     let mut sum0_1 = _mm256_setzero_ps();
 
@@ -395,40 +398,65 @@ pub fn gemv(
                     let mut sum3_0 = _mm256_setzero_ps();
                     let mut sum3_1 = _mm256_setzero_ps();
 
+                    let mut sum4_0 = _mm256_setzero_ps();
+                    let mut sum4_1 = _mm256_setzero_ps();
+
+                    let mut sum5_0 = _mm256_setzero_ps();
+                    let mut sum5_1 = _mm256_setzero_ps();
+
                     let mut i = 0usize;
 
-                    const PREFETCH_DIST: usize = 128;
-
-                    while i + 16 <= m {
+                    while i + 32 <= m {
                         _mm_prefetch(col0.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
-                        _mm_prefetch(col1.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
                         _mm_prefetch(col2.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
-                        _mm_prefetch(col3.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(col4.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
 
-                        // load x once (16 floats)
+                        // load x's once (32 floats)
                         let x0 = _mm256_loadu_ps(x_ptr.add(i));
                         let x1 = _mm256_loadu_ps(x_ptr.add(i + 8));
+                        let x2 = _mm256_loadu_ps(x_ptr.add(i + 16));
+                        let x3 = _mm256_loadu_ps(x_ptr.add(i + 24));
 
                         // compute fma for col 0
                         sum0_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i)), x0, sum0_0);
                         sum0_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i + 8)), x1, sum0_1);
+                        sum0_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i + 16)), x2, sum0_0);
+                        sum0_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col0.add(i + 24)), x3, sum0_1);
 
                         // compute fma for col 1
                         sum1_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i)), x0, sum1_0);
                         sum1_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i + 8)), x1, sum1_1);
+                        sum1_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i + 16)), x2, sum1_0);
+                        sum1_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i + 24)), x3, sum1_1);
 
                         //compute fma for col2
                         sum2_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i)), x0, sum2_0);
                         sum2_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i + 8)), x1, sum2_1);
+                        sum2_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i + 16)), x2, sum2_0);
+                        sum2_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i + 24)), x3, sum2_1);
 
                         //compute fma for col 3
                         sum3_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i)), x0, sum3_0);
                         sum3_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i + 8)), x1, sum3_1);
+                        sum3_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i + 16)), x2, sum3_0);
+                        sum3_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i + 24)), x3, sum3_1);
 
-                        _mm_prefetch(col4.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
-                        _mm_prefetch(col5.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        //compute fma for col 4
+                        sum4_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col4.add(i)), x0, sum4_0);
+                        sum4_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col4.add(i + 8)), x1, sum4_1);
+                        sum4_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col4.add(i + 16)), x2, sum4_0);
+                        sum4_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col4.add(i + 24)), x3, sum4_1);
 
-                        i += 16;
+                        //compute fma for col 4
+                        sum5_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col5.add(i)), x0, sum5_0);
+                        sum5_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col5.add(i + 8)), x1, sum5_1);
+                        sum5_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col5.add(i + 16)), x2, sum5_0);
+                        sum5_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col5.add(i + 24)), x3, sum5_1);
+
+                        _mm_prefetch(col6.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(col7.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
+
+                        i += 32;
                     }
 
                     // if 8 rows remaining
@@ -438,6 +466,8 @@ pub fn gemv(
                         sum1_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i)), x0, sum1_0);
                         sum2_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i)), x0, sum2_0);
                         sum3_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i)), x0, sum3_0);
+                        sum4_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col4.add(i)), x0, sum4_0);
+                        sum5_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col5.add(i)), x0, sum5_0);
                         i += 8;
                     }
 
@@ -446,6 +476,8 @@ pub fn gemv(
                     let mut dot1 = reduce_f32(_mm256_add_ps(sum1_0, sum1_1));
                     let mut dot2 = reduce_f32(_mm256_add_ps(sum2_0, sum2_1));
                     let mut dot3 = reduce_f32(_mm256_add_ps(sum3_0, sum3_1));
+                    let mut dot4 = reduce_f32(_mm256_add_ps(sum4_0, sum4_1));
+                    let mut dot5 = reduce_f32(_mm256_add_ps(sum5_0, sum5_1));
 
                     // scalar fallback
                     while i < m {
@@ -454,6 +486,8 @@ pub fn gemv(
                         dot1 = x_val.mul_add(*col1.add(i), dot1);
                         dot2 = x_val.mul_add(*col2.add(i), dot2);
                         dot3 = x_val.mul_add(*col3.add(i), dot3);
+                        dot4 = x_val.mul_add(*col4.add(i), dot4);
+                        dot5 = x_val.mul_add(*col5.add(i), dot5);
                         i += 1;
                     }
 
@@ -462,18 +496,24 @@ pub fn gemv(
                     *y_ptr.add(j + 1) = alpha.mul_add(dot1, *y_ptr.add(j + 1));
                     *y_ptr.add(j + 2) = alpha.mul_add(dot2, *y_ptr.add(j + 2));
                     *y_ptr.add(j + 3) = alpha.mul_add(dot3, *y_ptr.add(j + 3));
+                    *y_ptr.add(j + 4) = alpha.mul_add(dot4, *y_ptr.add(j + 4));
+                    *y_ptr.add(j + 5) = alpha.mul_add(dot5, *y_ptr.add(j + 5));
 
-                    j += 4;
+                    j += 6;
                 }
 
-                // if n is not divisible by 4, process remaining columns; no reuse but still simd dot product
+                // if n is not divisible by 6
+                // process remaining columns; no reuse but still simd dot product
                 while j < n {
                     let col = a_ptr.add(j * lda);
                     let mut sum0 = _mm256_setzero_ps();
                     let mut sum1 = _mm256_setzero_ps();
-                    let mut i = 0usize;
+                    let mut sum2 = _mm256_setzero_ps();
+                    let mut sum3 = _mm256_setzero_ps();
 
-                    while i + 16 <= m {
+                    let mut i = 0usize;
+                    // do four cols of 8 (4x8=32) elements at a time, then reduce to scalar
+                    while i + 32 <= m {
                         sum0 = _mm256_fmadd_ps(
                             _mm256_loadu_ps(col.add(i)),
                             _mm256_loadu_ps(x_ptr.add(i)),
@@ -484,7 +524,17 @@ pub fn gemv(
                             _mm256_loadu_ps(x_ptr.add(i + 8)),
                             sum1,
                         );
-                        i += 16;
+                        sum2 = _mm256_fmadd_ps(
+                            _mm256_loadu_ps(col.add(i + 16)),
+                            _mm256_loadu_ps(x_ptr.add(i + 16)),
+                            sum2,
+                        );
+                        sum3 = _mm256_fmadd_ps(
+                            _mm256_loadu_ps(col.add(i + 24)),
+                            _mm256_loadu_ps(x_ptr.add(i + 24)),
+                            sum3,
+                        );
+                        i += 32;
                     }
 
                     while i + 8 <= m {
@@ -496,13 +546,15 @@ pub fn gemv(
                         i += 8;
                     }
 
-                    let mut dot_val = reduce_f32(_mm256_add_ps(sum0, sum1));
+                    let dot0 = _mm256_add_ps(sum0, sum1);
+                    let dot1 = _mm256_add_ps(sum2, sum3);
+                    let mut dot = reduce_f32(_mm256_add_ps(dot0, dot1));
                     while i < m {
-                        dot_val = (*col.add(i)).mul_add(*x_ptr.add(i), dot_val);
+                        dot = (*col.add(i)).mul_add(*x_ptr.add(i), dot);
                         i += 1;
                     }
 
-                    *y_ptr.add(j) = alpha.mul_add(dot_val, *y_ptr.add(j));
+                    *y_ptr.add(j) = alpha.mul_add(dot, *y_ptr.add(j));
                     j += 1;
                 }
             }
@@ -511,8 +563,8 @@ pub fn gemv(
                 for j in 0..n {
                     let col = a_ptr.add(j * lda);
 
-                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_T0);
 
                     // four accumulators for the dot product,
                     // we will reduce them at the end

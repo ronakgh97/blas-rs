@@ -187,6 +187,12 @@ fn main() {
         kernel.split(',').collect()
     };
 
+    // pin core
+    let cores = core_affinity::get_core_ids().expect("Failed to get Core IDs");
+    println!("Available cores: {}", cores.len());
+    let core = cores[4];
+    core_affinity::set_for_current(core);
+
     println!("Heating up!!!");
     warmup(64, 2048);
 

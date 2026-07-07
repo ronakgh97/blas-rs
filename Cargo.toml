@@ -1,6 +1,6 @@
 [package]
 name = "blas-rs"
-version = "1.0.0-alpha.6"
+version = "1.0.0-alpha.7"
 edition = "2024"
 authors = ["ronakgh {ronakgh97@gmail.com}"]
 description = "Experimental F32 BLAS & Intel Math kernels library for x86_64 cpu"
@@ -49,4 +49,5 @@ rand_xoshiro = "0.8.1" # apparently faster than my impl of splitmix64 :(
 plotters = "0.3.7" # for plotting benchmarks
 blas = "0.23.0" # for BLAS bindings, used in the reference implementation and benchmarks
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
+core_affinity = "0.8.3"
 # ittapi = "0.5.0" intel accurate tracing api
