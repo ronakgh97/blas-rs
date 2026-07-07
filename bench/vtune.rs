@@ -1,7 +1,8 @@
-use blas_rs::lvl1::{axpy_unsafe, dot_unsafe};
+use blas_rs::lvl1::{axpy_unsafe, dot_unsafe, nrm2_unsafe};
 use blas_rs::lvl2::gemv;
 use blas_rs::lvl3::gemm;
 use blas_rs::utils::Noise;
+use std::arch::x86_64::{__rdtscp, _mm_lfence, _rdtsc};
 use std::env;
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -13,6 +14,8 @@ fn usage() {
     eprintln!("Kernels:");
     eprintln!("  axpy        Y = aX + Y");
     eprintln!("  dot         X . Y");
+    eprintln!("  nrm2        ||X||_2^2   ");
+    eprintln!("  asum        ||X||_1     ");
     eprintln!("  gemv        Y = aA*X + bY");
     eprintln!("  gemv_t      Y = aA^T*X + bY");
     eprintln!("  gemm_f_f    C = aAB + bC");
@@ -39,6 +42,12 @@ fn main() {
     });
     let time_secs: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(10.0);
 
+    // pin core
+    let cores = core_affinity::get_core_ids().expect("Failed to get Core IDs");
+    println!("Available cores: {}", cores.len());
+    let core = cores[4];
+    core_affinity::set_for_current(core);
+
     let mut noise = Noise::init();
     let n2 = size * size;
     let mut a = vec![0.0f32; n2];
@@ -53,6 +62,8 @@ fn main() {
 
     let flops_per_call: f64 = match kernel {
         "axpy" | "dot" => 2.0 * size as f64,
+        "nrm2" => 2.0 * size as f64 + 1.0,
+        "asum" => size as f64,
         "gemv" | "gemv_t" => 2.0 * size as f64 * size as f64,
         "gemm_f_f" | "gemm_t_f" | "gemm_f_t" | "gemm_t_t" => {
             2.0 * size as f64 * size as f64 * size as f64
@@ -76,6 +87,12 @@ fn main() {
             }
             "dot" => {
                 black_box(unsafe { dot_unsafe(size, &x, 1, &y, 1) });
+            }
+            "nrm2" => {
+                black_box(unsafe { nrm2_unsafe(size, &x, 1) });
+            }
+            "asum" => {
+                black_box(unsafe { nrm2_unsafe(size, &x, 1) });
             }
             "gemv" => {
                 gemv(size, size, 2.0, &a, size, &x, 1, 3.0, &mut y, 1, false);
@@ -124,6 +141,12 @@ fn main() {
         "profiling: {} for {:.0}s (size={})...",
         kernel, time_secs, size
     );
+
+    let clock_start_mark = unsafe {
+        _mm_lfence();
+        _rdtsc()
+    };
+
     let start = Instant::now();
     let mut runs: u64 = 0;
 
@@ -135,6 +158,12 @@ fn main() {
             }
             "dot" => {
                 black_box(unsafe { dot_unsafe(size, &x, 1, &y, 1) });
+            }
+            "nrm2" => {
+                black_box(unsafe { nrm2_unsafe(size, &x, 1) });
+            }
+            "asum" => {
+                black_box(unsafe { nrm2_unsafe(size, &x, 1) });
             }
             "gemv" => {
                 gemv(size, size, 2.0, &a, size, &x, 1, 3.0, &mut y, 1, false);
@@ -173,9 +202,16 @@ fn main() {
         runs += 1;
     }
 
+    let clock_end_mark = unsafe {
+        let e = __rdtscp(&mut 0);
+        _mm_lfence();
+        e
+    };
+
     let elapsed = start.elapsed().as_secs_f64();
     let total_flops = flops_per_call * runs as f64;
     let gflops = total_flops / elapsed / 1e9;
+    let cycles = (clock_end_mark - clock_start_mark) as f64;
 
     println!("---");
     println!("kernel:   {}", kernel);
@@ -183,5 +219,6 @@ fn main() {
     println!("runs:     {}", runs);
     println!("elapsed:  {:.3}s", elapsed);
     println!("flops/c:  {:.0}", flops_per_call);
-    println!("gflops:   {:.2}", gflops);
+    println!("cycles:   {:.0}", cycles);
+    println!("gflops:   {:.3}", gflops);
 }

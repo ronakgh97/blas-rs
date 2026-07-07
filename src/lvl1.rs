@@ -5,9 +5,9 @@ use std::arch::x86_64::{
     _MM_HINT_T2, _mm_prefetch, _mm256_add_epi32, _mm256_add_ps, _mm256_and_ps, _mm256_blendv_epi8,
     _mm256_blendv_ps, _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmp_ps, _mm256_fmadd_ps,
     _mm256_hadd_ps, _mm256_load_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_permute_ps,
-    _mm256_set_epi32, _mm256_set1_epi32, _mm256_set1_ps, _mm256_setzero_ps, _mm256_setzero_si256,
-    _mm256_shuffle_epi32, _mm256_storeu_ps, _mm256_storeu_si256, _mm256_stream_ps,
-    _mm256_zeroupper,
+    _mm256_rsqrt_ps, _mm256_set_epi32, _mm256_set1_epi32, _mm256_set1_ps, _mm256_setzero_ps,
+    _mm256_setzero_si256, _mm256_shuffle_epi32, _mm256_storeu_ps, _mm256_storeu_si256,
+    _mm256_stream_ps, _mm256_zeroupper,
 };
 use std::ptr::{copy_nonoverlapping, swap_nonoverlapping};
 // TODO: x[ix], x[ix + incx], x[ix + 2*incx], ..., x[ix + (n-1)*incx]
@@ -863,7 +863,8 @@ pub unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy: i32) -
                 let y2 = _mm256_loadu_ps(y_ptr.add(i + 16));
                 let y3 = _mm256_loadu_ps(y_ptr.add(i + 24));
 
-                // 4 accumulators to allow for some instruction-level parallelism, we will sum them up at the end
+                // 4 accumulators to allow for some instruction-level parallelism,
+                // we will sum them up at the end
                 sum0 = _mm256_fmadd_ps(x0, y0, sum0);
                 sum1 = _mm256_fmadd_ps(x1, y1, sum1);
                 sum2 = _mm256_fmadd_ps(x2, y2, sum2);
@@ -965,7 +966,10 @@ pub fn nrm2(n: usize, x: &[f32], incx: i32) -> f32 {
 
     if incx == 1 {
         let mut i = 0;
-        let mut sum = unsafe { _mm256_setzero_ps() };
+        let mut sum0 = unsafe { _mm256_setzero_ps() };
+        let mut sum1 = unsafe { _mm256_setzero_ps() };
+        let mut sum2 = unsafe { _mm256_setzero_ps() };
+        let mut sum3 = unsafe { _mm256_setzero_ps() };
 
         let x_ptr = x.as_ptr();
 
@@ -976,11 +980,10 @@ pub fn nrm2(n: usize, x: &[f32], incx: i32) -> f32 {
                 let x2 = _mm256_loadu_ps(x_ptr.add(i + 16));
                 let x3 = _mm256_loadu_ps(x_ptr.add(i + 24));
 
-                // I don't think, this will do what I intended too
-                sum = _mm256_fmadd_ps(x0, x0, sum);
-                sum = _mm256_fmadd_ps(x1, x1, sum);
-                sum = _mm256_fmadd_ps(x2, x2, sum);
-                sum = _mm256_fmadd_ps(x3, x3, sum);
+                sum0 = _mm256_fmadd_ps(x0, x0, sum0);
+                sum1 = _mm256_fmadd_ps(x1, x1, sum1);
+                sum2 = _mm256_fmadd_ps(x2, x2, sum2);
+                sum3 = _mm256_fmadd_ps(x3, x3, sum3);
 
                 i += 32;
 
@@ -988,6 +991,8 @@ pub fn nrm2(n: usize, x: &[f32], incx: i32) -> f32 {
             }
         }
 
+        let mut sum =
+            unsafe { _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3)) };
         while i + 8 <= n {
             unsafe {
                 let x = _mm256_loadu_ps(x_ptr.add(i));
@@ -998,7 +1003,7 @@ pub fn nrm2(n: usize, x: &[f32], incx: i32) -> f32 {
 
         let mut result = reduce_f32(sum);
         while i < n {
-            result += x[i] * x[i];
+            result = x[i].mul_add(x[i], result);
             i += 1;
         }
 
@@ -1044,10 +1049,13 @@ pub fn nrm2(n: usize, x: &[f32], incx: i32) -> f32 {
 #[allow(clippy::missing_safety_doc)]
 /// The nrm2 routines compute Euclidean norm of a vector.
 /// [ref](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/nrm2.html) for more details
-pub fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
+pub unsafe fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
     if incx == 1 {
         let mut i = 0;
-        let mut sum = unsafe { _mm256_setzero_ps() };
+        let mut sum0 = unsafe { _mm256_setzero_ps() };
+        let mut sum1 = unsafe { _mm256_setzero_ps() };
+        let mut sum2 = unsafe { _mm256_setzero_ps() };
+        let mut sum3 = unsafe { _mm256_setzero_ps() };
 
         let x_ptr = x.as_ptr();
 
@@ -1058,18 +1066,19 @@ pub fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
                 let x2 = _mm256_loadu_ps(x_ptr.add(i + 16));
                 let x3 = _mm256_loadu_ps(x_ptr.add(i + 24));
 
-                // I don't think, this will do what I intended to
-                sum = _mm256_fmadd_ps(x0, x0, sum);
-                sum = _mm256_fmadd_ps(x1, x1, sum);
-                sum = _mm256_fmadd_ps(x2, x2, sum);
-                sum = _mm256_fmadd_ps(x3, x3, sum);
+                sum0 = _mm256_fmadd_ps(x0, x0, sum0);
+                sum1 = _mm256_fmadd_ps(x1, x1, sum1);
+                sum2 = _mm256_fmadd_ps(x2, x2, sum2);
+                sum3 = _mm256_fmadd_ps(x3, x3, sum3);
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_T2);
+                _mm_prefetch(x_ptr.add(i + 64) as *const i8, _MM_HINT_T2);
             }
         }
 
+        let mut sum =
+            unsafe { _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3)) };
         while i + 8 <= n {
             unsafe {
                 let x = _mm256_loadu_ps(x_ptr.add(i));
@@ -1080,10 +1089,11 @@ pub fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
 
         let mut result = reduce_f32(sum);
         while i < n {
-            result += x[i] * x[i];
+            result = x[i].mul_add(x[i], result);
             i += 1;
         }
 
+        // TODO: Newton-Raphson refinement?
         result.sqrt()
     } else {
         let incx = incx as isize;
@@ -1229,7 +1239,7 @@ pub fn asum(n: usize, x: &[f32], incx: i32) -> f32 {
 #[allow(clippy::missing_safety_doc)]
 /// The asum routine computes the sum of the magnitudes of elements of a real vector, or the sum of magnitudes of the real and imaginary parts of elements of a complex vector.
 /// [ref](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/asum.html) for more details
-pub fn asum_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
+pub unsafe fn asum_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
     if incx == 1 {
         let mut i = 0;
         let x_ptr = x.as_ptr();
@@ -1488,7 +1498,7 @@ pub fn i_amax(n: usize, x: &[f32], incx: i32) -> usize {
 #[allow(clippy::missing_safety_doc)]
 /// The iamax routines return an index i such that x\[i\] has the maximum absolute value of all elements in vector x.
 /// [ref](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/iamax.html) for more details
-pub fn i_amax_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
+pub unsafe fn i_amax_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
     if incx == 1 {
         unsafe {
             let x_ptr = x.as_ptr();
@@ -1808,7 +1818,7 @@ pub fn i_amin(n: usize, x: &[f32], incx: i32) -> usize {
 #[allow(clippy::missing_safety_doc)]
 /// The iamin routines return an index i such that x\[i\] has the minimum absolute value of all elements in vector x.
 /// [ref](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/iamin.html) for more details
-pub fn i_amin_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
+pub unsafe fn i_amin_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
     if incx == 1 {
         unsafe {
             let x_ptr = x.as_ptr();
