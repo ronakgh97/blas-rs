@@ -1,4 +1,4 @@
-Rookie attempt to rewriting **BLAS FORTRAN 77** and **Intel Math Library** Kernels in modern rust. `ONLY x86_64`
+Rookie attempt to rewriting **BLAS FORTRAN 77** and **Intel Math Library** Kernels in modern native rust. `ONLY x86_64`
 
 > This will not cover all kernels for every single routine, but the most common & used ones, (excluding complex
 > type and only fp32) and I have **spammed** `_mm256*` intrinsics for all kernels, because I got I7 14650hx which does

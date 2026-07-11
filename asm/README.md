@@ -1,4 +1,4 @@
-This dir/ contains handwritten asm for some specific kernels,
+This dir/ contains handwritten ASM for some specific kernels,
 this will be used for better insights/optimzation and comparing with rust compiler and `openblas`
 
 > It will be written in NASM/Intel syntax, follows ubuntu abi register and
@@ -7,5 +7,5 @@ this will be used for better insights/optimzation and comparing with rust compil
 Todo:
 
 - lvl1: axpy, dot, i_amax, asum, nrm2
-- lvl2: gemv
-- lvl3: none
+- lvl2: gemv, gemv_t
+- lvl3: gemm_f_f

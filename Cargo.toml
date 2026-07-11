@@ -1,6 +1,6 @@
 [package]
 name = "blas-rs"
-version = "1.0.0-alpha.7"
+version = "1.0.0-alpha.8"
 edition = "2024"
 authors = ["ronakgh {ronakgh97@gmail.com}"]
 description = "Experimental F32 BLAS & Intel Math kernels library for x86_64 cpu"
@@ -13,10 +13,6 @@ keywords = ["blas", "simd", "math", "high-performance", "x86_64"]
 [lib]
 name = "blas_rs"
 path = "src/lib.rs"
-
-[[bin]]
-name = "asm_runner"
-path = "asm/runner.rs"
 
 [[bench]]
 name = "bencher"
@@ -38,12 +34,13 @@ debug = true
 opt-level = 3
 codegen-units = 1
 lto = "fat"
-debug = false
+debug = true
 
 [dependencies]
 rand = "0.10.1"
 rand_xoshiro = "0.8.1" # apparently faster than my impl of splitmix64 :(
 # rayon = "1.12.0" # for cpu parallel computations
+# cudarc = { version = "0.19.8", features = ["cuda-13030"] } # cuda or wgpu? :/
 
 [dev-dependencies]
 plotters = "0.3.7" # for plotting benchmarks

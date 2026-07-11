@@ -2,8 +2,10 @@
 //!
 //! Experimental BLAS kernels written in Rust for **`x86_64`**.
 //!
-//! This crate currently focuses on ALL Level BLAS operations for `f32` only,
-//! with SIMD-heavy implementations (`AVX2 only, so having AVX-512 cpu won't benefit`) where applicable.
+//! This crate currently focuses on ALL Level [BLAS](https://www.netlib.org/blas/blas.pdf) kernels for `f32` only,
+//! with SIMD-heavy implementations (`AVX2 only, so having AVX-512 CPU won't benefit`) where applicable.
+//! All implementations are in native **RUST**, no external dependencies or FFI calls to C/C++ libraries.
+//! The crate is intended for learning and experimentation purposes, not for production use.
 //!
 //! ## Modules Structure
 //!
@@ -12,11 +14,11 @@
 //! - [`lvl3`]: implements for matrix-matrix routines.
 //! - [`utils`]: internal helpers used by kernels and tests.
 //!
-//! ## Implemented kernels [WIP](https://github.com/ronakgh97/blas_rs)
+//! ## Implemented kernels
 //!
 //! - lvl1: `axpy`, `scal`, `copy`, `swap`, `dot`, `nrm2`, `asum`, `i_amax`, `rot`, `rotg`.
-//! - lvl2: `gemv`
-//! - lvl3: `gemm`
+//! - lvl2: `gemv`.
+//! - lvl3: `gemm`.
 //!
 //! ## Usage
 //!
@@ -48,7 +50,7 @@
 //! - [Intel doc](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/blas-routines.html)
 //! - [intrinsics guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html)
 //!
-//! ### Checkout benchmarks: [GitHub](https://github.com/ronakgh97/blas_rs)
+//! ### Checkout benchmarks: [GitHub](https://github.com/ronakgh97/blas-rs/blob/master/README.md)
 //!
 
 #[cfg(not(target_arch = "x86_64"))]
@@ -62,6 +64,7 @@ compile_error!(
     "blas_rs requires some x86-64-v3 CPU capable features. Try compiling with `-C target-cpu=x86-64-v3`"
 );
 
+pub mod gpu;
 pub mod lvl1;
 pub mod lvl2;
 pub mod lvl3;
