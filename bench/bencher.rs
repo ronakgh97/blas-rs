@@ -3,7 +3,7 @@ mod utils;
 
 use crate::harness::{MetricSet, run_bench};
 use crate::utils::{axpy_intel_mkl, dot_intel_mkl, gemm_intel_mkl, gemv_intel_mkl};
-use blas_rs::lvl1::{axpy, axpy_unsafe, dot, dot_unsafe};
+use blas_rs::lvl1::{axpy, dot};
 use blas_rs::lvl2::gemv;
 use blas_rs::lvl3::gemm;
 use blas_rs::utils::*;
@@ -143,6 +143,7 @@ fn warmup(r: usize, s: usize) {
     }
 }
 
+// TODO: Add cycle/ops
 enum BenchMetrics {
     Gflops(Vec<(f64, f64)>),
     Latency(Vec<(f64, f64)>),
@@ -245,10 +246,7 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
 
         let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
             y1_buf.fill(1.0);
-            let (rc, toc) = run_bench(
-                || unsafe { axpy_unsafe(i, 3.0, &x_buf, 1, &mut y1_buf, 1) },
-                target_time,
-            );
+            let (rc, toc) = run_bench(|| axpy(i, 3.0, &x_buf, 1, &mut y1_buf, 1), target_time);
 
             y2_buf.fill(1.0);
             let (rc_intel, toc_intel) = run_bench(
@@ -265,10 +263,7 @@ fn bench_axpy(size_sample: &[usize], target_time: f64, plot_path: &Path) {
             );
 
             y1_buf.fill(1.0);
-            let (rc, toc) = run_bench(
-                || unsafe { axpy_unsafe(i, 3.0, &x_buf, 1, &mut y1_buf, 1) },
-                target_time,
-            );
+            let (rc, toc) = run_bench(|| axpy(i, 3.0, &x_buf, 1, &mut y1_buf, 1), target_time);
 
             (rc, rc_intel, toc, toc_intel)
         };
@@ -338,8 +333,8 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
         let (rc, rc_intel, toc, toc_intel) = if noise.bool(0.5) {
             y1_buf.fill(1.0);
             let (rc, toc) = run_bench(
-                || unsafe {
-                    dot_unsafe(i, &x_buf, 1, &y1_buf, 1);
+                || {
+                    dot(i, &x_buf, 1, &y1_buf, 1);
                 },
                 target_time,
             );
@@ -364,8 +359,8 @@ fn bench_dot(size_sample: &[usize], target_time: f64, plot_path: &Path) {
 
             y1_buf.fill(1.0);
             let (rc, toc) = run_bench(
-                || unsafe {
-                    dot_unsafe(i, &x_buf, 1, &y1_buf, 1);
+                || {
+                    dot(i, &x_buf, 1, &y1_buf, 1);
                 },
                 target_time,
             );

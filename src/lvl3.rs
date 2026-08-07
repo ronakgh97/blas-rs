@@ -1,5 +1,6 @@
+//! Implementation of Level 3 BLAS routines
 use crate::lvl1::scal;
-use crate::utils::reduce_f32;
+use crate::utils::reduce_add;
 #[allow(unused)]
 use std::arch::x86_64::{
     _MM_HINT_T0, _MM_HINT_T1, _mm_prefetch, _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps,
@@ -789,25 +790,25 @@ pub fn gemm(
                         }
 
                         // reduce scalar
-                        let mut dot00 = reduce_f32(sum00);
-                        let mut dot01 = reduce_f32(sum01);
-                        let mut dot02 = reduce_f32(sum02);
-                        let mut dot03 = reduce_f32(sum03);
+                        let mut dot00 = reduce_add(sum00);
+                        let mut dot01 = reduce_add(sum01);
+                        let mut dot02 = reduce_add(sum02);
+                        let mut dot03 = reduce_add(sum03);
 
-                        let mut dot10 = reduce_f32(sum10);
-                        let mut dot11 = reduce_f32(sum11);
-                        let mut dot12 = reduce_f32(sum12);
-                        let mut dot13 = reduce_f32(sum13);
+                        let mut dot10 = reduce_add(sum10);
+                        let mut dot11 = reduce_add(sum11);
+                        let mut dot12 = reduce_add(sum12);
+                        let mut dot13 = reduce_add(sum13);
 
-                        let mut dot20 = reduce_f32(sum20);
-                        let mut dot21 = reduce_f32(sum21);
-                        let mut dot22 = reduce_f32(sum22);
-                        let mut dot23 = reduce_f32(sum23);
+                        let mut dot20 = reduce_add(sum20);
+                        let mut dot21 = reduce_add(sum21);
+                        let mut dot22 = reduce_add(sum22);
+                        let mut dot23 = reduce_add(sum23);
 
-                        let mut dot30 = reduce_f32(sum30);
-                        let mut dot31 = reduce_f32(sum31);
-                        let mut dot32 = reduce_f32(sum32);
-                        let mut dot33 = reduce_f32(sum33);
+                        let mut dot30 = reduce_add(sum30);
+                        let mut dot31 = reduce_add(sum31);
+                        let mut dot32 = reduce_add(sum32);
+                        let mut dot33 = reduce_add(sum33);
 
                         // scalar fallback for remaining K
                         while p < k {
@@ -886,10 +887,10 @@ pub fn gemm(
                             p += 8;
                         }
 
-                        let mut dot0 = reduce_f32(sum0);
-                        let mut dot1 = reduce_f32(sum1);
-                        let mut dot2 = reduce_f32(sum2);
-                        let mut dot3 = reduce_f32(sum3);
+                        let mut dot0 = reduce_add(sum0);
+                        let mut dot1 = reduce_add(sum1);
+                        let mut dot2 = reduce_add(sum2);
+                        let mut dot3 = reduce_add(sum3);
 
                         while p < k {
                             let a_val = *a_ptr_i.add(p);
@@ -937,10 +938,10 @@ pub fn gemm(
                             p += 8;
                         }
 
-                        let mut dot0 = reduce_f32(sum0);
-                        let mut dot1 = reduce_f32(sum1);
-                        let mut dot2 = reduce_f32(sum2);
-                        let mut dot3 = reduce_f32(sum3);
+                        let mut dot0 = reduce_add(sum0);
+                        let mut dot1 = reduce_add(sum1);
+                        let mut dot2 = reduce_add(sum2);
+                        let mut dot3 = reduce_add(sum3);
 
                         while p < k {
                             let b_val = *b0_ptr.add(p);
@@ -971,7 +972,7 @@ pub fn gemm(
                             );
                             p += 8;
                         }
-                        let mut dot0 = reduce_f32(sum0);
+                        let mut dot0 = reduce_add(sum0);
                         while p < k {
                             dot0 = (*a_ptr_i.add(p)).mul_add(*b0_ptr.add(p), dot0);
                             p += 1;

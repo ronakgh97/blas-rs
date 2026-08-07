@@ -1,4 +1,4 @@
-use blas_rs::lvl1::{axpy_unsafe, dot_unsafe, nrm2_unsafe};
+use blas_rs::lvl1::{asum, axpy, dot, nrm2};
 use blas_rs::lvl2::gemv;
 use blas_rs::lvl3::gemm;
 use blas_rs::utils::Noise;
@@ -7,6 +7,9 @@ use std::env;
 use std::f64::consts::PI;
 use std::hint::black_box;
 use std::time::Instant;
+
+// Clean & less noise harness, preferable to be with Intel Vtune Profiler.
+// It runs a kernel for a given size and duration, and prints the number of runs, elapsed time, and GFLOPS.
 
 fn usage() {
     eprintln!("Usage: vtune <kernel> <size> [time_secs]");
@@ -82,17 +85,19 @@ fn main() {
     while warmup_start.elapsed().as_secs_f64() < PI {
         match kernel {
             "axpy" => {
-                let _: () = unsafe { axpy_unsafe(size, 2.0, &x, 1, &mut y, 1) };
-                black_box(());
+                let _: () = {
+                    axpy(size, 2.0, &x, 1, &mut y, 1);
+                    black_box(())
+                };
             }
             "dot" => {
-                black_box(unsafe { dot_unsafe(size, &x, 1, &y, 1) });
+                black_box(dot(size, &x, 1, &y, 1));
             }
             "nrm2" => {
-                black_box(unsafe { nrm2_unsafe(size, &x, 1) });
+                black_box(nrm2(size, &x, 1));
             }
             "asum" => {
-                black_box(unsafe { nrm2_unsafe(size, &x, 1) });
+                black_box(asum(size, &x, 1));
             }
             "gemv" => {
                 gemv(size, size, 2.0, &a, size, &x, 1, 3.0, &mut y, 1, false);
@@ -153,17 +158,19 @@ fn main() {
     while start.elapsed().as_secs_f64() < time_secs {
         match kernel {
             "axpy" => {
-                let _: () = unsafe { axpy_unsafe(size, 2.0, &x, 1, &mut y, 1) };
-                black_box(());
+                let _: () = {
+                    axpy(size, 2.0, &x, 1, &mut y, 1);
+                    black_box(())
+                };
             }
             "dot" => {
-                black_box(unsafe { dot_unsafe(size, &x, 1, &y, 1) });
+                black_box(dot(size, &x, 1, &y, 1));
             }
             "nrm2" => {
-                black_box(unsafe { nrm2_unsafe(size, &x, 1) });
+                black_box(nrm2(size, &x, 1));
             }
             "asum" => {
-                black_box(unsafe { nrm2_unsafe(size, &x, 1) });
+                black_box(asum(size, &x, 1));
             }
             "gemv" => {
                 gemv(size, size, 2.0, &a, size, &x, 1, 3.0, &mut y, 1, false);

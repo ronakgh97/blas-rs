@@ -1,8 +1,9 @@
+//! Implementation of Level 2 BLAS routines
 use crate::lvl1::scal;
-use crate::utils::reduce_f32;
+use crate::utils::reduce_add;
 use std::arch::x86_64::{
-    _MM_HINT_NTA, _MM_HINT_T0, _mm_prefetch, _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps,
-    _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+    _MM_HINT_NTA, _MM_HINT_T0, _MM_HINT_T1, _mm_prefetch, _mm256_add_ps, _mm256_fmadd_ps,
+    _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -103,8 +104,8 @@ pub fn gemv(
                     let col4 = a_ptr.add((j + 4) * lda);
                     let col5 = a_ptr.add((j + 5) * lda);
 
-                    _mm_prefetch(a_ptr.add((j + 6) * lda) as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(a_ptr.add((j + 12) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 6) * lda) as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(a_ptr.add((j + 12) * lda) as *const i8, _MM_HINT_T1);
 
                     let mut i = 0usize;
 
@@ -333,8 +334,8 @@ pub fn gemv(
                     let x_val = alpha * *x_ptr.offset(ix_b + j as isize * incx_isize);
                     let col = a_ptr.add(j * lda);
 
-                    //_mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
-                    //_mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_T0);
+                    //_mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_T0);
 
                     // strided axpy into y
                     let mut iy = iy_b;
@@ -472,12 +473,12 @@ pub fn gemv(
                     }
 
                     // reduction of acc
-                    let mut dot0 = reduce_f32(_mm256_add_ps(sum0_0, sum0_1));
-                    let mut dot1 = reduce_f32(_mm256_add_ps(sum1_0, sum1_1));
-                    let mut dot2 = reduce_f32(_mm256_add_ps(sum2_0, sum2_1));
-                    let mut dot3 = reduce_f32(_mm256_add_ps(sum3_0, sum3_1));
-                    let mut dot4 = reduce_f32(_mm256_add_ps(sum4_0, sum4_1));
-                    let mut dot5 = reduce_f32(_mm256_add_ps(sum5_0, sum5_1));
+                    let mut dot0 = reduce_add(_mm256_add_ps(sum0_0, sum0_1));
+                    let mut dot1 = reduce_add(_mm256_add_ps(sum1_0, sum1_1));
+                    let mut dot2 = reduce_add(_mm256_add_ps(sum2_0, sum2_1));
+                    let mut dot3 = reduce_add(_mm256_add_ps(sum3_0, sum3_1));
+                    let mut dot4 = reduce_add(_mm256_add_ps(sum4_0, sum4_1));
+                    let mut dot5 = reduce_add(_mm256_add_ps(sum5_0, sum5_1));
 
                     // scalar fallback
                     while i < m {
@@ -548,7 +549,7 @@ pub fn gemv(
 
                     let dot0 = _mm256_add_ps(sum0, sum1);
                     let dot1 = _mm256_add_ps(sum2, sum3);
-                    let mut dot = reduce_f32(_mm256_add_ps(dot0, dot1));
+                    let mut dot = reduce_add(_mm256_add_ps(dot0, dot1));
                     while i < m {
                         dot = (*col.add(i)).mul_add(*x_ptr.add(i), dot);
                         i += 1;
@@ -605,7 +606,7 @@ pub fn gemv(
                     // reduce to scalar
                     let sum01 = _mm256_add_ps(sum0, sum1);
                     let sum23 = _mm256_add_ps(sum2, sum3);
-                    let mut dot_val = reduce_f32(_mm256_add_ps(sum01, sum23));
+                    let mut dot_val = reduce_add(_mm256_add_ps(sum01, sum23));
 
                     // any remaining
                     while i < m {
@@ -628,8 +629,8 @@ pub fn gemv(
                 for j in 0..n {
                     let col = a_ptr.add(j * lda);
 
-                    //_mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
-                    //_mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_T0);
+                    //_mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_T0);
 
                     // compute dot
                     let mut ix = ix_b;

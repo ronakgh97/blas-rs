@@ -7,13 +7,6 @@
 //! All implementations are in native **RUST**, no external dependencies or FFI calls to C/C++ libraries.
 //! The crate is intended for learning and experimentation purposes, not for production use.
 //!
-//! ## Modules Structure
-//!
-//! - [`lvl1`]: implements vector-vector and vector-scalar routines.
-//! - [`lvl2`]: implements for matrix-vector routines.
-//! - [`lvl3`]: implements for matrix-matrix routines.
-//! - [`utils`]: internal helpers used by kernels and tests.
-//!
 //! ## Implemented kernels
 //!
 //! - lvl1: `axpy`, `scal`, `copy`, `swap`, `dot`, `nrm2`, `asum`, `i_amax`, `rot`, `rotg`.
@@ -30,23 +23,25 @@
 //! let x = vec![1.0, 2.0, 3.0, 4.0];
 //! let mut y = vec![10.0, 20.0, 30.0, 40.0];
 //!
-//! unsafe { lvl1::axpy_unsafe(n, alpha, &x, 1, &mut y, 1) };
+//! lvl1::axpy(n, alpha, &x, 1, &mut y, 1);
 //! assert_eq!(y, vec![12.0, 24.0, 36.0, 48.0]);
 //!
 //! let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
 //! let y = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0];
-//! assert_eq!(unsafe { lvl1::dot_unsafe(n, &x, 1, &y, 1) }, 110.0);
+//! assert_eq!(lvl1::dot(n, &x, 1, &y, 1), 110.0);
 //! ```
 //!
 //! ### Notes
 //!
 //! - APIs mirror BLAS-style signatures (`n`, raw increments, and slice buffers).
-//! - Most routines panic on invalid increments (`incx == 0`, `incy == 0`, `n ==0` etc.) or insufficient slice length for the requested stride. Alternatively there are unsafe versions of the routines that bypass for performance.
+//! - Most routines panic on invalid increments (`incx == 0`, `incy == 0`, `n ==0` etc.) or insufficient slice length for the requested stride.
 //! - This crate is not for a complete BLAS replacement; its purely learning focused and improve my understanding about x86, HPC, etc. So behavior and performance may change as more kernels are added.
 //!
 //!
-//! ### Ref
+//! ### References
+//!
 //! - [Netlib](https://www.netlib.org/blas/)
+//! - [Cache blocking techniques](https://suif.stanford.edu/papers/lam-asplos91.pdf)
 //! - [Intel doc](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/blas-routines.html)
 //! - [intrinsics guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html)
 //!

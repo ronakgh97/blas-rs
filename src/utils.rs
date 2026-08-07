@@ -4,10 +4,10 @@ use rand::{RngExt, SeedableRng};
 use rand_xoshiro::Xoroshiro128PlusPlus;
 use rand_xoshiro::rand_core::Rng;
 use std::arch::x86_64::{
-    __cpuid_count, __m256, _mm_cvtss_f32, _mm_max_ps, _mm_min_ps, _mm_shuffle_ps, _mm256_add_ps,
-    _mm256_castps256_ps128, _mm256_cvtss_f32, _mm256_extractf128_ps, _mm256_loadu_ps,
-    _mm256_permute_ps, _mm256_permute2f128_ps, _mm256_shuffle_ps, _mm256_storeu_ps,
-    _mm256_unpackhi_ps, _mm256_unpacklo_ps,
+    __cpuid_count, __m256, _mm_add_ps, _mm_cvtss_f32, _mm_hadd_ps, _mm_max_ps, _mm_min_ps,
+    _mm_shuffle_ps, _mm256_castps256_ps128, _mm256_extractf128_ps, _mm256_loadu_ps,
+    _mm256_permute2f128_ps, _mm256_shuffle_ps, _mm256_storeu_ps, _mm256_unpackhi_ps,
+    _mm256_unpacklo_ps,
 };
 
 /// A simple random noise generator using the `Xoroshiro128PlusPlus` algorithm from the `rand_xoshiro` crate.
@@ -78,17 +78,15 @@ fn test_f32_fill() {
 /// Performs horizontal add reduction of `__m256` vector and returns as a `f32`
 pub fn reduce_add(v: __m256) -> f32 {
     unsafe {
-        // first pass; [a  b  c  d | e  f  g  h]
-        let hi = _mm256_permute2f128_ps(v, v, 1); // [e  f  g  h | a  b  c  d]
-        let sum = _mm256_add_ps(v, hi); // [a+e  b+f  c+g  d+h | e+a  f+b  g+c  h+d]
-        // [x0 x1 x2 x3] -> [x2 x3 x0 x1]
-        let hi = _mm256_permute_ps(sum, 0b01001110); // [c+g  d+h  a+e  b+f | g+c  h+d  e+a  f+b]
+        // first pass; [a,b,c,d | e,f,g,h]
+        let hi = _mm256_extractf128_ps(v, 1); // [e,f,g,h]
+        let lo = _mm256_castps256_ps128(v); // [a,b,c,d]
+        let hsum = _mm_add_ps(lo, hi); // [a+b, c+d, e+f, g+h]
 
         // second pass; add the two halves together
-        let sum = _mm256_add_ps(sum, hi); // [a+e+b+f  c+g+d+h  e+a+f+b  g+c+h+d]
-        let hi = _mm256_permute_ps(sum, 0b10110001); // [c+g+d+h  a+e+b+f  g+c+h+d  e+a+f+b]
-        let sum = _mm256_add_ps(sum, hi); // [a+e+b+f+c+g+d+h  a+e+b+f+c+g+d+h  e+a+f+b+g+c+h+d  e+a+f+b+g+c+h+d]
-        _mm256_cvtss_f32(sum) // just extract one
+        let sum = _mm_hadd_ps(hsum, hsum); // [a+e+b+f c+g+d+h a+e+b+f c+g+d+h]
+        let sum = _mm_hadd_ps(sum, sum); // [a+e+b+f+c+g+d+h,_,_,_]
+        _mm_cvtss_f32(sum) // just extract one
     }
 }
 
@@ -154,7 +152,7 @@ fn test_simd_reduce() {
             let time = Instant::now();
 
             for i in 0..RUN {
-                // for simplicity and avoid obvious `stack-spill`
+                // for simplicity and avoiding obvious `stack-spill`
                 // we use rust idiomatic iterator
                 let max = sample[i * LANE..(i + 1) * LANE]
                     .iter()
@@ -176,7 +174,7 @@ fn test_simd_reduce() {
             (clock_end_mark - clock_start_mark, elapsed)
         };
 
-        // opt wat
+        // opt way
         let (opt_cycle_c, opt_elapsed) = {
             // start
             let clock_start_mark = {
@@ -202,9 +200,12 @@ fn test_simd_reduce() {
             (clock_end_mark - clock_start_mark, elapsed)
         };
 
+        let nvt_cycle_per_ops = ntv_cycle_c / (RUN as u64);
+        let opt_cycle_per_ops = opt_cycle_c / (RUN as u64);
+
         println!(
-            "Native: cycles: {}, elapsed: {:?}, Opt: cycles: {}, elapsed: {:?}",
-            ntv_cycle_c, ntv_elapsed, opt_cycle_c, opt_elapsed
+            "Native: cycles/ops: {}, elapsed: {:?}\nOpt: cycles/ops: {}, elapsed: {:?}",
+            nvt_cycle_per_ops, ntv_elapsed, opt_cycle_per_ops, opt_elapsed
         );
     }
 }

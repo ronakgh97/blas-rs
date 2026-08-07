@@ -1,1 +1,1 @@
-//! GPU module here
+//! Cross-GPU module here
