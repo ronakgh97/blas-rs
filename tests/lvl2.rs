@@ -1,179 +1,201 @@
 use blas_rs::lvl2::gemv;
 use std::panic::catch_unwind;
 
-#[test]
-fn test_gemv_no_trans() {
-    // A (2x3), column-major:
-    // [1 2 3]
-    // [4 5 6]
-    let a = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
-    let x = vec![1.0, 1.0, 1.0];
-    let mut y = vec![0.0, 0.0];
+mod mkl_ref;
+use mkl_ref::*;
 
-    gemv(2, 3, 1.0, &a, 2, &x, 1, 0.0, &mut y, 1, false);
-    assert_eq!(y, vec![6.0, 15.0]);
-
-    let mut y = vec![10.0, 20.0];
-    gemv(2, 3, 1.0, &a, 2, &x, 1, 1.0, &mut y, 1, false);
-    assert_eq!(y, vec![16.0, 35.0]);
+#[inline]
+fn make_a(m: usize, n: usize, lda: usize) -> Vec<f32> {
+    let mut a = vec![0.0f32; lda * n];
+    for j in 0..n {
+        for i in 0..m {
+            a[i + j * lda] = ((i * 31 + j * 17 + 1) as f32) * 0.1;
+        }
+    }
+    a
 }
 
 #[test]
-fn test_gemv_trans_basic_non_square() {
-    // A (2x3), column-major:
-    // [1 2 3]
-    // [4 5 6]
-    // A^T * [1, 1] = [5, 7, 9]
-    let a = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
-    let x = vec![1.0, 1.0];
-    let mut y = vec![0.0, 0.0, 0.0];
+fn gemv_basic_and_sizes() {
+    // no-transpose
+    for (m, n) in [
+        (1, 1),
+        (2, 3),
+        (3, 2),
+        (7, 7),
+        (8, 8),
+        (9, 9),
+        (16, 16),
+        (32, 32),
+        (128, 128),
+        (1024, 1024),
+    ] {
+        let a = make_a(m, n, m);
+        let x: Vec<f32> = (0..n).map(|i| (i + 1) as f32 * 0.1).collect();
+        let mut y_o = vec![0.0f32; m];
+        let mut y_m = vec![0.0f32; m];
+        gemv(m, n, 1.0, &a, m, &x, 1, 0.0, &mut y_o, 1, false);
+        mkl_gemv(m, n, 1.0, &a, m, &x, 1, 0.0, &mut y_m, 1, false);
+        assert_eq_slices(&y_o, &y_m, &format!("gemv no-trans m={m} n={n}"));
+    }
 
-    gemv(2, 3, 1.0, &a, 2, &x, 1, 0.0, &mut y, 1, true);
-    assert_eq!(y, vec![5.0, 7.0, 9.0]);
+    // transpose
+    for (m, n) in [
+        (1, 1),
+        (2, 3),
+        (3, 2),
+        (7, 7),
+        (8, 8),
+        (9, 9),
+        (16, 16),
+        (32, 32),
+        (128, 128),
+        (1024, 1024),
+    ] {
+        let a = make_a(m, n, m);
+        let x: Vec<f32> = (0..m).map(|i| (i + 1) as f32 * 0.1).collect();
+        let mut y_o = vec![0.0f32; n];
+        let mut y_m = vec![0.0f32; n];
+        gemv(m, n, 1.0, &a, m, &x, 1, 0.0, &mut y_o, 1, true);
+        mkl_gemv(m, n, 1.0, &a, m, &x, 1, 0.0, &mut y_m, 1, true);
+        assert_eq_slices(&y_o, &y_m, &format!("gemv trans m={m} n={n}"));
+    }
 }
 
 #[test]
-fn test_gemv_alpha_zero_beta_scale_only() {
-    let a = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
+fn gemv_neg_stride() {
+    let a = make_a(4, 3, 4);
 
-    let x = vec![1.0, 1.0, 1.0];
-    let mut y = vec![10.0, 20.0];
-    gemv(2, 3, 0.0, &a, 2, &x, 1, 0.5, &mut y, 1, false);
-    assert_eq!(y, vec![5.0, 10.0]);
+    // neg incx, no-trans: x[2,1,0], A*x = ...
+    let x = [1.0f32, 2.0, 3.0];
+    let mut y_o = [0.0f32; 4];
+    let mut y_m = [0.0f32; 4];
+    gemv(4, 3, 1.0, &a, 4, &x, -1, 0.0, &mut y_o, 1, false);
+    mkl_gemv(4, 3, 1.0, &a, 4, &x, -1, 0.0, &mut y_m, 1, false);
+    assert_eq_slices(&y_o, &y_m, "gemv neg incx no-trans");
 
-    let x_t = vec![1.0, 1.0];
-    let mut y_t = vec![2.0, 4.0, 6.0];
-    gemv(2, 3, 0.0, &a, 2, &x_t, 1, 2.0, &mut y_t, 1, true);
-    assert_eq!(y_t, vec![4.0, 8.0, 12.0]);
+    // neg incx, trans
+    let x = [1.0f32, 2.0];
+    let mut y_o = [0.0f32; 3];
+    let mut y_m = [0.0f32; 3];
+    gemv(2, 3, 1.0, &a, 2, &x, -1, 0.0, &mut y_o, 1, true);
+    mkl_gemv(2, 3, 1.0, &a, 2, &x, -1, 0.0, &mut y_m, 1, true);
+    assert_eq_slices(&y_o, &y_m, "gemv neg incx trans");
 }
 
 #[test]
-fn test_gemv_with_lda_padding() {
-    // m=2, n=3, lda=4 (2 valid + 2 padding each column)
-    // columns: [1,4], [2,5], [3,6]
-    let a = vec![1.0, 4.0, 99.0, 99.0, 2.0, 5.0, 99.0, 99.0, 3.0, 6.0];
+fn gemv_nonunit_stride() {
+    let a = make_a(4, 3, 4);
 
-    let x = vec![1.0, 1.0, 1.0];
-    let mut y = vec![0.0, 0.0];
-    gemv(2, 3, 1.0, &a, 4, &x, 1, 0.0, &mut y, 1, false);
-    assert_eq!(y, vec![6.0, 15.0]);
+    // incx=2, incy=2, no-trans
+    let x = [1.0f32, 99.0, 2.0, 99.0, 3.0];
+    let mut y_o = [0.0f32; 7];
+    let mut y_m = [0.0f32; 7];
+    gemv(4, 3, 1.0, &a, 4, &x, 2, 0.0, &mut y_o, 2, false);
+    mkl_gemv(4, 3, 1.0, &a, 4, &x, 2, 0.0, &mut y_m, 2, false);
+    assert_eq_slices(&y_o, &y_m, "gemv nonunit stride no-trans");
 
-    let x_t = vec![1.0, 1.0];
-    let mut y_t = vec![0.0, 0.0, 0.0];
-    gemv(2, 3, 1.0, &a, 4, &x_t, 1, 0.0, &mut y_t, 1, true);
-    assert_eq!(y_t, vec![5.0, 7.0, 9.0]);
+    // incx=2, incy=2, trans (m=2, n=3)
+    let a2 = make_a(2, 3, 2);
+    let x = [1.0f32, 99.0, 2.0];
+    let mut y_o = [0.0f32; 5];
+    let mut y_m = [0.0f32; 5];
+    gemv(2, 3, 1.0, &a2, 2, &x, 2, 0.0, &mut y_o, 2, true);
+    mkl_gemv(2, 3, 1.0, &a2, 2, &x, 2, 0.0, &mut y_m, 2, true);
+    assert_eq_slices(&y_o, &y_m, "gemv nonunit stride trans");
 }
 
 #[test]
-fn test_gemv_stride_cases() {
-    let a = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
+fn gemv_alpha_neg_pos() {
+    let m = 5;
+    let n = 4;
+    let a = make_a(m, n, m);
+    let x: Vec<f32> = (0..n).map(|i| (i + 1) as f32 * 0.1).collect();
 
-    // non-trans, positive strides (incx=2, incy=2)
-    // effective x = [1,2,3], A*x = [14, 32]
-    let x = vec![1.0, 99.0, 2.0, 99.0, 3.0];
-    let mut y = vec![0.0, 99.0, 0.0];
-    gemv(2, 3, 1.0, &a, 2, &x, 2, 0.0, &mut y, 2, false);
-    assert_eq!(y, vec![14.0, 99.0, 32.0]);
+    // alpha=0, beta scales y
+    let mut y_o = [3.0f32; 5];
+    let mut y_m = [3.0f32; 5];
+    gemv(m, n, 0.0, &a, m, &x, 1, 2.0, &mut y_o, 1, false);
+    mkl_gemv(m, n, 0.0, &a, m, &x, 1, 2.0, &mut y_m, 1, false);
+    assert_eq_slices(&y_o, &y_m, "gemv alpha=0");
 
-    // non-trans, negative incx
-    // x indices visited: 2,1,0 -> [3,2,1]
-    // A*x = [10, 28]
-    let x_neg = vec![1.0, 2.0, 3.0];
-    let mut y_neg = vec![0.0, 0.0];
-    gemv(2, 3, 1.0, &a, 2, &x_neg, -1, 0.0, &mut y_neg, 1, false);
-    assert_eq!(y_neg, vec![10.0, 28.0]);
+    // alpha=-1, beta=1 (accumulate negative)
+    let mut y_o = [1.0f32; 5];
+    let mut y_m = [1.0f32; 5];
+    gemv(m, n, -1.0, &a, m, &x, 1, 1.0, &mut y_o, 1, false);
+    mkl_gemv(m, n, -1.0, &a, m, &x, 1, 1.0, &mut y_m, 1, false);
+    assert_eq_slices(&y_o, &y_m, "gemv alpha=-1 beta=1");
 
-    // non-trans, negative incy
-    // y indices visited: 1,0, so result order is reversed in backing buffer
-    let x_ones = vec![1.0, 1.0, 1.0];
-    let mut y_rev = vec![0.0, 0.0];
-    gemv(2, 3, 1.0, &a, 2, &x_ones, 1, 0.0, &mut y_rev, -1, false);
-    assert_eq!(y_rev, vec![15.0, 6.0]);
+    // alpha=2.5, beta=0.5
+    let mut y_o = [1.0f32; 5];
+    let mut y_m = [1.0f32; 5];
+    gemv(m, n, 2.5, &a, m, &x, 1, 0.5, &mut y_o, 1, false);
+    mkl_gemv(m, n, 2.5, &a, m, &x, 1, 0.5, &mut y_m, 1, false);
+    assert_eq_slices(&y_o, &y_m, "gemv alpha=2.5 beta=0.5");
 
-    // trans, mixed strides (incx=-1, incy=2)
-    // effective x = [2,1], A^T*x = [6,9,12]
-    let x_t = vec![1.0, 2.0];
-    let mut y_t = vec![0.0, 99.0, 0.0, 99.0, 0.0];
-    gemv(2, 3, 1.0, &a, 2, &x_t, -1, 0.0, &mut y_t, 2, true);
-    assert_eq!(y_t, vec![6.0, 99.0, 9.0, 99.0, 12.0]);
+    // transposed, alpha=-1
+    let mut y_o = [1.0f32; 4];
+    let mut y_m = [1.0f32; 4];
+    let xt: Vec<f32> = (0..m).map(|i| (i + 1) as f32 * 0.1).collect();
+    gemv(m, n, -1.0, &a, m, &xt, 1, 0.0, &mut y_o, 1, true);
+    mkl_gemv(m, n, -1.0, &a, m, &xt, 1, 0.0, &mut y_m, 1, true);
+    assert_eq_slices(&y_o, &y_m, "gemv alpha=-1 trans");
 }
 
 #[test]
 #[should_panic]
-fn test_gemv_incx_zero_panic() {
-    let a = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
-    let x = vec![1.0, 1.0, 1.0];
-    let mut y = vec![0.0, 0.0];
-    gemv(2, 3, 1.0, &a, 2, &x, 0, 0.0, &mut y, 1, false);
+fn gemv_panic() {
+    gemv(
+        2,
+        2,
+        1.0,
+        &[1.0; 4],
+        2,
+        &[1.0; 2],
+        0,
+        0.0,
+        &mut [0.0; 2],
+        1,
+        false,
+    );
 }
 
 #[test]
-#[should_panic]
-fn test_gemv_incy_zero_panic() {
-    let a = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
-    let x = vec![1.0, 1.0, 1.0];
-    let mut y = vec![0.0, 0.0];
-    gemv(2, 3, 1.0, &a, 2, &x, 1, 0.0, &mut y, 0, false);
-}
-
-#[test]
-#[should_panic]
-fn test_gemv_bad_lda_panic() {
-    let a = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
-    let x = vec![1.0, 1.0, 1.0];
-    let mut y = vec![0.0, 0.0];
-    gemv(2, 3, 1.0, &a, 1, &x, 1, 0.0, &mut y, 1, false);
-}
-
-#[test]
-#[should_panic]
-fn test_gemv_zero_m_panic() {
-    let a = vec![1.0];
-    let x = vec![1.0];
-    let mut y = vec![1.0];
-    gemv(0, 1, 1.0, &a, 1, &x, 1, 1.0, &mut y, 1, false);
-}
-
-#[test]
-#[should_panic]
-fn test_gemv_zero_n_panic() {
-    let a = vec![1.0];
-    let x = vec![1.0];
-    let mut y = vec![1.0];
-    gemv(1, 0, 1.0, &a, 1, &x, 1, 1.0, &mut y, 1, false);
-}
-
-#[test]
-fn test_gemv_bounds_error() {
-    let result = catch_unwind(|| {
-        let a = vec![1.0, 4.0, 2.0, 5.0]; // too short for m=2,n=3,lda=2
-        let x = vec![1.0, 1.0, 1.0];
-        let mut y = vec![0.0, 0.0];
-        gemv(2, 3, 1.0, &a, 2, &x, 1, 0.0, &mut y, 1, false);
-    });
-    assert!(result.is_err());
-
-    let result = catch_unwind(|| {
-        let a = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
-        let x = vec![1.0, 1.0]; // too short for non-trans n=3
-        let mut y = vec![0.0, 0.0];
-        gemv(2, 3, 1.0, &a, 2, &x, 1, 0.0, &mut y, 1, false);
-    });
-    assert!(result.is_err());
-
-    let result = catch_unwind(|| {
-        let a = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
-        let x = vec![1.0, 1.0, 1.0];
-        let mut y = vec![0.0]; // too short for non-trans m=2
-        gemv(2, 3, 1.0, &a, 2, &x, 1, 0.0, &mut y, 1, false);
-    });
-    assert!(result.is_err());
-
-    let result = catch_unwind(|| {
-        let a = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
-        let x = vec![1.0]; // too short for trans m=2
-        let mut y = vec![0.0, 0.0, 0.0];
-        gemv(2, 3, 1.0, &a, 2, &x, 1, 0.0, &mut y, 1, true);
-    });
-    assert!(result.is_err());
+fn gemv_bounds_error() {
+    assert!(
+        catch_unwind(|| {
+            gemv(
+                2,
+                3,
+                1.0,
+                &[1.0; 2],
+                2,
+                &[1.0; 3],
+                1,
+                0.0,
+                &mut [0.0; 2],
+                1,
+                false,
+            );
+        })
+        .is_err()
+    );
+    assert!(
+        catch_unwind(|| {
+            gemv(
+                2,
+                3,
+                1.0,
+                &[1.0; 6],
+                2,
+                &[1.0; 2],
+                1,
+                0.0,
+                &mut [0.0; 2],
+                1,
+                false,
+            );
+        })
+        .is_err()
+    );
 }

@@ -1,401 +1,202 @@
 use blas_rs::lvl3::gemm;
 
-#[test]
-fn test_gemm_no_trans() {
-    let m = 3_usize;
-    let n = 3_usize;
-    let k = 3_usize;
+mod mkl_ref;
+use mkl_ref::*;
 
-    let a = vec![1.0, 4.0, 7.0, 2.0, 5.0, 8.0, 3.0, 6.0, 9.0];
-    let b = vec![1.0, 4.0, 7.0, 2.0, 5.0, 8.0, 3.0, 6.0, 9.0];
-    let mut c = vec![0.0; m * n];
-    let mut c_expected = vec![0.0; m * n];
-
-    gemm(m, n, k, 1.0, &a, m, &b, k, 0.0, &mut c, m, false, false);
-    gemm_checker(
-        m,
-        n,
-        k,
-        1.0,
-        &a,
-        m,
-        &b,
-        k,
-        0.0,
-        &mut c_expected,
-        m,
-        false,
-        false,
-    );
-
-    for i in 0..(m * n) {
-        assert!((c[i] - c_expected[i]).abs() < 1e-5, "mismatch at {}", i);
+#[inline]
+fn make_a(rows: usize, cols: usize, lda: usize) -> Vec<f32> {
+    let mut a = vec![0.0f32; lda * cols];
+    for j in 0..cols {
+        for i in 0..rows {
+            a[i + j * lda] = ((i * 31 + j * 17 + 1) as f32) * 0.1;
+        }
     }
+    a
 }
 
-#[test]
-fn test_gemm_trans_a() {
-    let m = 3_usize;
-    let n = 3_usize;
-    let k = 2_usize;
-    let lda = m;
-
-    // Need A: (m-1)*lda + k = 2*3 + 2 = 8 elements for transposed A
-    let a = vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0, 0.0, 0.0];
-    let b = vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0];
-    let mut c = vec![0.0; m * n];
-    let mut c_expected = vec![0.0; m * n];
-
-    gemm(m, n, k, 1.0, &a, lda, &b, k, 0.0, &mut c, m, true, false);
-    gemm_checker(
-        m,
-        n,
-        k,
-        1.0,
-        &a,
-        lda,
-        &b,
-        k,
-        0.0,
-        &mut c_expected,
-        m,
-        true,
-        false,
-    );
-
-    for i in 0..(m * n) {
-        assert!((c[i] - c_expected[i]).abs() < 1e-5, "mismatch at {}", i);
-    }
-}
-
-#[test]
-fn test_gemm_trans_b() {
-    let m = 2_usize;
-    let n = 3_usize;
-    let k = 2_usize;
-    let lda = m;
-    let ldb = n; // Must be >= max(k,n) = max(2,3) = 3
-
-    let a = vec![1.0, 4.0, 2.0, 5.0];
-    let b = vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0, 1.0, 3.0, 5.0]; // n*ldb = 9 elements
-    let mut c = vec![0.0; m * n];
-    let mut c_expected = vec![0.0; m * n];
-
-    gemm(m, n, k, 1.0, &a, lda, &b, ldb, 0.0, &mut c, m, false, true);
-    gemm_checker(
-        m,
-        n,
-        k,
-        1.0,
-        &a,
-        lda,
-        &b,
-        ldb,
-        0.0,
-        &mut c_expected,
-        m,
-        false,
-        true,
-    );
-
-    for i in 0..(m * n) {
-        assert!((c[i] - c_expected[i]).abs() < 1e-5, "mismatch at {}", i);
-    }
-}
-
-#[test]
-fn test_gemm_trans_ab() {
-    let m = 2_usize;
-    let n = 2_usize;
-    let k = 2_usize;
-    let lda = k;
-    let ldb = n;
-
-    let a = vec![1.0, 3.0, 2.0, 4.0];
-    let b = vec![1.0, 3.0, 2.0, 4.0];
-    let mut c = vec![0.0; m * n];
-    let mut c_expected = vec![0.0; m * n];
-
-    gemm(m, n, k, 1.0, &a, lda, &b, ldb, 0.0, &mut c, m, true, true);
-    gemm_checker(
-        m,
-        n,
-        k,
-        1.0,
-        &a,
-        lda,
-        &b,
-        ldb,
-        0.0,
-        &mut c_expected,
-        m,
-        true,
-        true,
-    );
-
-    for i in 0..(m * n) {
-        assert!(
-            (c[i] - c_expected[i]).abs() < 1e-5,
-            "mismatch at {}: got {}, expected {}",
-            i,
-            c[i],
-            c_expected[i]
-        );
-    }
-}
-
-#[test]
-fn test_gemm_alpha_zero_beta_scale_only() {
-    let m = 2_usize;
-    let n = 2_usize;
-    let k = 3_usize;
-
-    let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let b = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let mut c = vec![10.0, 20.0, 30.0, 40.0];
-    let mut c_expected = [10.0, 20.0, 30.0, 40.0];
-
-    gemm(m, n, k, 0.0, &a, m, &b, k, 2.0, &mut c, m, false, false);
-
-    for item in c_expected.iter_mut().take(m * n) {
-        *item *= 2.0;
-    }
-
-    for i in 0..(m * n) {
-        assert!((c[i] - c_expected[i]).abs() < 1e-5, "mismatch at {}", i);
-    }
-}
-
-#[test]
-fn test_gemm_beta_zero() {
-    let m = 2_usize;
-    let n = 2_usize;
-    let k = 2_usize;
-
-    let a = vec![1.0, 2.0, 3.0, 4.0];
-    let b = vec![1.0, 2.0, 3.0, 4.0];
-    let mut c = vec![100.0, 200.0, 300.0, 400.0];
-    let mut c_expected = vec![100.0, 200.0, 300.0, 400.0];
-
-    gemm(m, n, k, 1.0, &a, m, &b, k, 0.0, &mut c, m, false, false);
-    gemm_checker(
-        m,
-        n,
-        k,
-        1.0,
-        &a,
-        m,
-        &b,
-        k,
-        0.0,
-        &mut c_expected,
-        m,
-        false,
-        false,
-    );
-
-    for i in 0..(m * n) {
-        assert!((c[i] - c_expected[i]).abs() < 1e-5, "mismatch at {}", i);
-    }
-}
-
-#[test]
-fn test_gemm_beta_scale_and_add() {
-    let m = 2_usize;
-    let n = 2_usize;
-    let k = 2_usize;
-
-    let a = vec![1.0, 2.0, 3.0, 4.0];
-    let b = vec![1.0, 2.0, 3.0, 4.0];
-    let mut c = vec![1.0, 1.0, 1.0, 1.0];
-    let mut c_expected = vec![1.0, 1.0, 1.0, 1.0];
-
-    gemm(m, n, k, 1.0, &a, m, &b, k, 1.0, &mut c, m, false, false);
-    gemm_checker(
-        m,
-        n,
-        k,
-        1.0,
-        &a,
-        m,
-        &b,
-        k,
-        1.0,
-        &mut c_expected,
-        m,
-        false,
-        false,
-    );
-
-    for i in 0..(m * n) {
-        assert!((c[i] - c_expected[i]).abs() < 1e-5, "mismatch at {}", i);
-    }
-}
-
-#[test]
-fn test_gemm_zero_m() {
-    let m = 0_usize;
-    let n = 3_usize;
-    let k = 2_usize;
-
-    let a = vec![];
-    let b = vec![];
-    let mut c = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let c_orig = c.clone();
-
-    gemm(m, n, k, 1.0, &a, m, &b, k, 2.0, &mut c, n, false, false);
-
-    assert_eq!(c, c_orig);
-}
-
-#[test]
-fn test_gemm_zero_n() {
-    let m = 3_usize;
-    let n = 0_usize;
-    let k = 2_usize;
-
-    let a = vec![];
-    let b = vec![];
-    let mut c = vec![1.0, 2.0, 3.0];
-    let c_orig = c.clone();
-
-    gemm(m, n, k, 1.0, &a, m, &b, k, 2.0, &mut c, n, false, false);
-
-    assert_eq!(c, c_orig);
-}
-
-#[test]
-fn test_gemm_zero_k() {
-    let m = 2_usize;
-    let n = 2_usize;
-    let k = 0_usize;
-
-    let a = vec![];
-    let b = vec![];
-    let mut c = vec![1.0, 2.0, 3.0, 4.0];
-    let c_orig = c.clone();
-
-    gemm(m, n, k, 1.0, &a, m, &b, k, 2.0, &mut c, m, false, false);
-
-    assert_eq!(c, c_orig);
-}
-
-#[test]
-#[should_panic]
-fn test_gemm_lda_zero_panic() {
-    let m = 2_usize;
-    let n = 2_usize;
-    let k = 2_usize;
-    let a = vec![];
-    let b = vec![];
-    let mut c = vec![];
-
-    gemm(m, n, k, 1.0, &a, 0, &b, k, 0.0, &mut c, m, false, false);
-}
-
-#[test]
-#[should_panic]
-fn test_gemm_ldb_zero_panic() {
-    let m = 2_usize;
-    let n = 2_usize;
-    let k = 2_usize;
-    let a = vec![];
-    let b = vec![];
-    let mut c = vec![];
-
-    gemm(m, n, k, 1.0, &a, m, &b, 0, 0.0, &mut c, m, false, false);
-}
-
-#[test]
-fn test_gemm_various_sizes() {
-    for size in [2, 3, 4, 8, 16] {
-        let m = size;
-        let n = size;
-        let k = size;
-
-        let a: Vec<f32> = (0..m * k).map(|i| (i + 1) as f32).collect();
-        let b: Vec<f32> = (0..k * n).map(|i| (i + 1) as f32).collect();
-        let mut c = vec![0.0; m * n];
-        let mut c_expected = vec![0.0; m * n];
-
-        gemm(m, n, k, 1.0, &a, m, &b, k, 0.0, &mut c, m, false, false);
-        gemm_checker(
-            m,
-            n,
-            k,
-            1.0,
-            &a,
-            m,
-            &b,
-            k,
-            0.0,
-            &mut c_expected,
-            m,
-            false,
-            false,
-        );
-
-        for i in 0..(m * n) {
+#[inline]
+fn assert_gemm_eq(ours: &[f32], mkl: &[f32], m: usize, n: usize, ldc: usize, label: &str) {
+    for j in 0..n {
+        for i in 0..m {
+            let idx = i + j * ldc;
+            let (o, mv) = (ours[idx], mkl[idx]);
+            let err = (o - mv).abs();
+            let rel = if mv.abs() > 1.0 { err / mv.abs() } else { err };
             assert!(
-                (c[i] - c_expected[i]).abs() < 1e-4,
-                "size {} mismatch at {}",
-                size,
-                i
+                err <= 1e-3 || rel <= 1e-4,
+                "{label}[{i},{j}]: ours={o}, mkl={mv}, err={err}"
             );
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn gemm_checker(
-    m: usize,
-    n: usize,
-    k: usize,
-    alpha: f32,
-    a: &[f32],
-    lda: usize,
-    b: &[f32],
-    ldb: usize,
-    beta: f32,
-    c: &mut [f32],
-    ldc: usize,
-    is_trans_a: bool,
-    is_trans_b: bool,
-) {
-    assert!(c.len() >= ldc * n);
-
-    // Scale C first by beta
-    for col in 0..n {
-        for row in 0..m {
-            c[row + col * ldc] *= beta;
-        }
+#[test]
+fn gemm_basic_and_sizes() {
+    for sz in [1, 2, 3, 4, 7, 8, 9, 16, 32, 64, 128, 256, 512] {
+        let a = make_a(sz, sz, sz);
+        let b = make_a(sz, sz, sz);
+        let mut c_o = vec![0.0f32; sz * sz];
+        let mut c_m = vec![0.0f32; sz * sz];
+        gemm(
+            sz, sz, sz, 1.0, &a, sz, &b, sz, 0.0, &mut c_o, sz, false, false,
+        );
+        mkl_gemm(
+            sz, sz, sz, 1.0, &a, sz, &b, sz, 0.0, &mut c_m, sz, false, false,
+        );
+        assert_gemm_eq(&c_o, &c_m, sz, sz, sz, &format!("gemm n={sz}"));
     }
 
-    for j in 0..n {
-        for i in 0..m {
-            let mut sum = 0.0f32;
-
-            for p in 0..k {
-                let a_ip = if !is_trans_a {
-                    // A(i, p), A is (m x k) when not transposed
-                    a[i + p * lda]
-                } else {
-                    // A^T(i, p) = A(p, i), A is (k x m) when transposed
-                    a[p + i * lda]
-                };
-
-                let b_pj = if !is_trans_b {
-                    // B(p, j), B is (k x n) when not transposed
-                    b[p + j * ldb]
-                } else {
-                    // B^T(p, j) = B(j, p), B is (n x k) when transposed
-                    b[j + p * ldb]
-                };
-
-                sum += a_ip * b_pj;
-            }
-
-            c[i + j * ldc] += alpha * sum;
-        }
+    // non-square
+    for (m, n, k) in [(3, 7, 5), (7, 3, 5), (5, 3, 7), (1, 10, 1), (10, 1, 1)] {
+        let a = make_a(m, k, m);
+        let b = make_a(k, n, k);
+        let mut c_o = vec![0.0f32; m * n];
+        let mut c_m = vec![0.0f32; m * n];
+        gemm(m, n, k, 1.0, &a, m, &b, k, 0.0, &mut c_o, m, false, false);
+        mkl_gemm(m, n, k, 1.0, &a, m, &b, k, 0.0, &mut c_m, m, false, false);
+        assert_gemm_eq(&c_o, &c_m, m, n, m, &format!("gemm {m}x{n}x{k}"));
     }
+}
+
+#[test]
+fn gemm_trans_a() {
+    for sz in [1, 2, 3, 7, 8, 9, 16, 32, 64, 128] {
+        let a = make_a(sz, sz, sz);
+        let b = make_a(sz, sz, sz);
+        let mut c_o = vec![0.0f32; sz * sz];
+        let mut c_m = vec![0.0f32; sz * sz];
+        gemm(
+            sz, sz, sz, 1.0, &a, sz, &b, sz, 0.0, &mut c_o, sz, true, false,
+        );
+        mkl_gemm(
+            sz, sz, sz, 1.0, &a, sz, &b, sz, 0.0, &mut c_m, sz, true, false,
+        );
+        assert_gemm_eq(&c_o, &c_m, sz, sz, sz, &format!("gemm trans_a n={sz}"));
+    }
+}
+
+#[test]
+fn gemm_trans_b() {
+    for sz in [1, 2, 3, 7, 8, 9, 16, 32, 64, 128] {
+        let a = make_a(sz, sz, sz);
+        let b = make_a(sz, sz, sz);
+        let mut c_o = vec![0.0f32; sz * sz];
+        let mut c_m = vec![0.0f32; sz * sz];
+        gemm(
+            sz, sz, sz, 1.0, &a, sz, &b, sz, 0.0, &mut c_o, sz, false, true,
+        );
+        mkl_gemm(
+            sz, sz, sz, 1.0, &a, sz, &b, sz, 0.0, &mut c_m, sz, false, true,
+        );
+        assert_gemm_eq(&c_o, &c_m, sz, sz, sz, &format!("gemm trans_b n={sz}"));
+    }
+}
+
+#[test]
+fn gemm_trans_ab() {
+    for sz in [1, 2, 3, 7, 8, 9, 16, 32, 64, 128] {
+        let a = make_a(sz, sz, sz);
+        let b = make_a(sz, sz, sz);
+        let mut c_o = vec![0.0f32; sz * sz];
+        let mut c_m = vec![0.0f32; sz * sz];
+        gemm(
+            sz, sz, sz, 1.0, &a, sz, &b, sz, 0.0, &mut c_o, sz, true, true,
+        );
+        mkl_gemm(
+            sz, sz, sz, 1.0, &a, sz, &b, sz, 0.0, &mut c_m, sz, true, true,
+        );
+        assert_gemm_eq(&c_o, &c_m, sz, sz, sz, &format!("gemm trans_ab n={sz}"));
+    }
+}
+
+#[test]
+fn gemm_lda_padding() {
+    let (m, n, k, lda, ldb) = (3, 3, 3, 5, 5);
+    let a = make_a(m, k, lda);
+    let b = make_a(k, n, ldb);
+    let mut c_o = vec![0.0f32; m * n];
+    let mut c_m = vec![0.0f32; m * n];
+    gemm(
+        m, n, k, 1.0, &a, lda, &b, ldb, 0.0, &mut c_o, m, false, false,
+    );
+    mkl_gemm(
+        m, n, k, 1.0, &a, lda, &b, ldb, 0.0, &mut c_m, m, false, false,
+    );
+    assert_gemm_eq(&c_o, &c_m, m, n, m, "gemm lda padding");
+
+    // trans_a with padding
+    let a_t = make_a(k, m, lda);
+    let b2 = make_a(k, n, k);
+    let mut c_o2 = vec![0.0f32; m * n];
+    let mut c_m2 = vec![0.0f32; m * n];
+    gemm(
+        m, n, k, 1.0, &a_t, lda, &b2, k, 0.0, &mut c_o2, m, true, false,
+    );
+    mkl_gemm(
+        m, n, k, 1.0, &a_t, lda, &b2, k, 0.0, &mut c_m2, m, true, false,
+    );
+    assert_gemm_eq(&c_o2, &c_m2, m, n, m, "gemm trans_a lda padding");
+}
+
+#[test]
+fn gemm_alpha_neg_pos() {
+    let (m, n, k) = (8, 6, 5);
+    let a = make_a(m, k, m);
+    let b = make_a(k, n, k);
+
+    // alpha=0, beta scales C
+    let mut c_o = vec![5.0f32; m * n];
+    let mut c_m = c_o.clone();
+    gemm(m, n, k, 0.0, &a, m, &b, k, 2.0, &mut c_o, m, false, false);
+    mkl_gemm(m, n, k, 0.0, &a, m, &b, k, 2.0, &mut c_m, m, false, false);
+    assert_gemm_eq(&c_o, &c_m, m, n, m, "gemm alpha=0");
+
+    // beta=0, overwrite C
+    let mut c_o = vec![999.0f32; m * n];
+    let mut c_m = c_o.clone();
+    gemm(m, n, k, 1.0, &a, m, &b, k, 0.0, &mut c_o, m, false, false);
+    mkl_gemm(m, n, k, 1.0, &a, m, &b, k, 0.0, &mut c_m, m, false, false);
+    assert_gemm_eq(&c_o, &c_m, m, n, m, "gemm beta=0");
+
+    // accumulate
+    let mut c_o: Vec<f32> = (0..(m * n)).map(|i| i as f32 * 0.01).collect();
+    let mut c_m = c_o.clone();
+    gemm(m, n, k, 1.0, &a, m, &b, k, 1.0, &mut c_o, m, false, false);
+    mkl_gemm(m, n, k, 1.0, &a, m, &b, k, 1.0, &mut c_m, m, false, false);
+    assert_gemm_eq(&c_o, &c_m, m, n, m, "gemm accumulate");
+
+    // alpha=-1, beta=2
+    let mut c_o: Vec<f32> = (0..(m * n)).map(|i| i as f32 * 0.01).collect();
+    let mut c_m = c_o.clone();
+    gemm(m, n, k, -1.0, &a, m, &b, k, 2.0, &mut c_o, m, false, false);
+    mkl_gemm(m, n, k, -1.0, &a, m, &b, k, 2.0, &mut c_m, m, false, false);
+    assert_gemm_eq(&c_o, &c_m, m, n, m, "gemm alpha=-1 beta=2");
+
+    // trans_a, alpha=3, beta=-1
+    let a_t = make_a(k, m, m);
+    let mut c_o: Vec<f32> = (0..(m * n)).map(|i| i as f32 * 0.01).collect();
+    let mut c_m = c_o.clone();
+    gemm(m, n, k, 3.0, &a_t, m, &b, k, -1.0, &mut c_o, m, true, false);
+    mkl_gemm(m, n, k, 3.0, &a_t, m, &b, k, -1.0, &mut c_m, m, true, false);
+    assert_gemm_eq(&c_o, &c_m, m, n, m, "gemm trans_a alpha=3 beta=-1");
+}
+
+#[test]
+#[should_panic]
+fn gemm_panic() {
+    gemm(2, 2, 2, 1.0, &[], 0, &[], 2, 0.0, &mut [], 2, false, false);
+}
+
+#[test]
+fn gemm_zero_dims() {
+    let mut c = vec![1.0f32; 4];
+    let orig = c.clone();
+    gemm(0, 2, 2, 1.0, &[], 0, &[], 0, 2.0, &mut c, 2, false, false);
+    assert_eq!(c, orig);
+
+    gemm(2, 0, 2, 1.0, &[], 0, &[], 0, 2.0, &mut c, 2, false, false);
+    assert_eq!(c, orig);
+
+    gemm(2, 2, 0, 1.0, &[], 0, &[], 0, 2.0, &mut c, 2, false, false);
+    assert_eq!(c, orig);
 }

@@ -1,626 +1,416 @@
 use blas_rs::lvl1::*;
-use blas_rs::utils::Noise;
+
+mod mkl_ref;
+use mkl_ref::*;
+
+// ─── axpy ───────────────────────────────────────────────────────────────────
 
 #[test]
-fn test_axpy() {
-    let x = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-    let mut y = vec![0.0; 8];
-
-    axpy(8, 2.0, &x, 1, &mut y, 1);
-    assert_eq!(y, vec![0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0]);
-    y.fill(0.0);
-
-    axpy(8, 2.0, &x, 1, &mut y, -1);
-    assert_eq!(y, vec![14.0, 12.0, 10.0, 8.0, 6.0, 4.0, 2.0, 0.0]);
-    y.fill(0.0);
-
-    axpy(8, 2.0, &x, -1, &mut y, 1);
-    assert_eq!(y, vec![14.0, 12.0, 10.0, 8.0, 6.0, 4.0, 2.0, 0.0]);
-    y.fill(0.0);
-
-    axpy(4, 2.0, &x, 2, &mut y, 2);
-    assert_eq!(y, vec![0.0, 0.0, 4.0, 0.0, 8.0, 0.0, 12.0, 0.0]);
-    y.fill(0.0);
-
-    axpy(0, 2.0, &x, 1, &mut y, 1);
-    assert_eq!(y, vec![0.0; 8]);
-    y.fill(0.0);
-
-    axpy(8, 0.0, &x, 1, &mut y, 1);
-    assert_eq!(y, vec![0.0; 8]);
-    y.fill(0.0);
-
-    axpy(8, -1.0, &x, 1, &mut y, 1);
-    assert_eq!(y, vec![0.0, -1.0, -2.0, -3.0, -4.0, -5.0, -6.0, -7.0]);
-    y.fill(0.0);
-
-    let mut gen_x = vec![0.0f32; 8192];
-    let mut gen_y = vec![0.0f32; 8192];
-
-    let mut noise = Noise::init();
-    noise.fill_f32(&mut gen_x);
-    noise.fill_f32(&mut gen_y);
-
-    let r = 1024;
-
-    let start = std::time::Instant::now();
-    for _ in 0..r {
-        axpy(gen_x.len(), 4.0, &gen_x, 1, &mut gen_y, 1);
+fn axpy_basic_and_sizes() {
+    for n in [1, 7, 8, 9, 16, 32, 128, 256, 1024] {
+        let x: Vec<f32> = (0..n).map(|i| (i + 1) as f32 * 0.1).collect();
+        let mut y_o = vec![0.0f32; n];
+        let mut y_m = vec![0.0f32; n];
+        axpy(n, 2.0, &x, 1, &mut y_o, 1);
+        mkl_axpy(n, 2.0, &x, 1, &mut y_m, 1);
+        assert_eq_slices(&y_o, &y_m, &format!("axpy n={n}"));
     }
-    let elapsed = start.elapsed().as_secs_f64();
+}
 
-    let gflops = (2.0 * gen_x.len() as f64 * r as f64) / (elapsed * 1e9);
+#[test]
+fn axpy_neg_stride() {
+    let x = [8.0f32, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0];
+    let mut y_o = [0.0f32; 8];
+    let mut y_m = [0.0f32; 8];
+    axpy(4, 1.0, &x, -1, &mut y_o, -1);
+    mkl_axpy(4, 1.0, &x, -1, &mut y_m, -1);
+    assert_eq_slices(&y_o, &y_m, "axpy neg stride");
+}
 
-    println!(
-        "Elapsed time: {:.6} seconds, GFLOPS: {:.2}",
-        elapsed, gflops
-    );
+#[test]
+fn axpy_nonunit_stride() {
+    let x = [1.0f32, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
+    let mut y_o = [0.0f32; 8];
+    let mut y_m = [0.0f32; 8];
+    axpy(4, 3.0, &x, 2, &mut y_o, 2);
+    mkl_axpy(4, 3.0, &x, 2, &mut y_m, 2);
+    assert_eq_slices(&y_o, &y_m, "axpy nonunit stride");
+}
+
+#[test]
+fn axpy_alpha_neg_pos() {
+    let x = [1.0f32, 2.0, 3.0, 4.0];
+    for alpha in [-1.0, 0.0, 0.5, 2.5] {
+        let mut y_o = [5.0f32; 4];
+        let mut y_m = [5.0f32; 4];
+        axpy(4, alpha, &x, 1, &mut y_o, 1);
+        mkl_axpy(4, alpha, &x, 1, &mut y_m, 1);
+        assert_eq_slices(&y_o, &y_m, &format!("axpy alpha={alpha}"));
+    }
 }
 
 #[test]
 #[should_panic]
-fn test_panic_axpy() {
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let mut y = vec![0.0; 4];
-    axpy(4, 2.0, &x, 0, &mut y, 1);
+fn axpy_panic() {
+    let x = [1.0f32; 4];
+    let mut y = [0.0f32; 4];
+    axpy(4, 1.0, &x, 0, &mut y, 1);
+}
 
-    let mut y = vec![0.0; 4];
-    axpy(4, 2.0, &x, 1, &mut y, 0);
+// ─── scal ───────────────────────────────────────────────────────────────────
 
-    let x = vec![1.0, 2.0];
-    let mut y = vec![0.0; 4];
-    axpy(4, 2.0, &x, 1, &mut y, 1);
-
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let mut y = vec![0.0; 2];
-    axpy(4, 2.0, &x, 1, &mut y, 1);
+#[test]
+fn scal_basic_and_sizes() {
+    for n in [1, 7, 8, 9, 16, 32, 128, 256, 1024] {
+        let mut x_o: Vec<f32> = (0..n).map(|i| (i + 1) as f32 * 0.1).collect();
+        let mut x_m = x_o.clone();
+        scal(n, 3.0, &mut x_o, 1);
+        mkl_scal(n, 3.0, &mut x_m, 1);
+        assert_eq_slices(&x_o, &x_m, &format!("scal n={n}"));
+    }
 }
 
 #[test]
-fn test_scal() {
-    let mut x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    scal(8, 2.0, &mut x, 1);
-    assert_eq!(x, vec![2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]);
+fn scal_neg_stride() {
+    let mut x_o = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let mut x_m = x_o;
+    scal(4, -1.0, &mut x_o, -1);
+    mkl_scal(4, -1.0, &mut x_m, -1);
+    assert_eq_slices(&x_o, &x_m, "scal neg stride");
+}
 
-    let mut x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    scal(8, 1.0, &mut x, 1);
-    assert_eq!(x, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+#[test]
+fn scal_nonunit_stride() {
+    let mut x_o = [1.0f32, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
+    let mut x_m = x_o;
+    scal(4, 5.0, &mut x_o, 2);
+    mkl_scal(4, 5.0, &mut x_m, 2);
+    assert_eq_slices(&x_o, &x_m, "scal nonunit stride");
+}
 
-    let mut x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    scal(5, -1.0, &mut x, -1);
-    assert_eq!(x, vec![-1.0, -2.0, -3.0, -4.0, -5.0, 6.0, 7.0, 8.0]);
-
-    let mut x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    scal(4, 3.0, &mut x, 2);
-    assert_eq!(x, vec![3.0, 2.0, 9.0, 4.0, 15.0, 6.0, 21.0, 8.0]);
-
-    let mut x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    scal(0, 2.0, &mut x, 1);
-    assert_eq!(x, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
-
-    let mut x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    scal(8, 0.0, &mut x, 1);
-    assert_eq!(x, vec![0.0; 8]);
-
-    let mut x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    scal(8, 0.5, &mut x, 1);
-    assert_eq!(x, vec![0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]);
+#[test]
+fn scal_alpha_neg_pos() {
+    for alpha in [-1.0, 0.0, 0.5, 2.5] {
+        let mut x_o = [1.0f32, 2.0, 3.0, 4.0];
+        let mut x_m = x_o;
+        scal(4, alpha, &mut x_o, 1);
+        mkl_scal(4, alpha, &mut x_m, 1);
+        assert_eq_slices(&x_o, &x_m, &format!("scal alpha={alpha}"));
+    }
 }
 
 #[test]
 #[should_panic]
-fn test_scal_panic() {
-    let mut x = vec![1.0, 2.0, 3.0, 4.0];
+fn scal_panic() {
+    let mut x = [1.0f32; 4];
     scal(4, 2.0, &mut x, 0);
-
-    let mut x = vec![1.0, 2.0];
-    scal(4, 2.0, &mut x, 1);
 }
 
-#[test]
-fn test_copy() {
-    let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-
-    let mut y = vec![0.0; 8];
-    copy(8, &x, 1, &mut y, 1);
-    assert_eq!(y, x);
-
-    let mut y = vec![0.0; 8];
-    copy(8, &x, -1, &mut y, 1);
-    assert_eq!(y, vec![8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]);
-
-    let mut y = vec![0.0; 8];
-    copy(4, &x, 2, &mut y, 2);
-    assert_eq!(y, vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0, 7.0, 0.0]);
-
-    let mut y = vec![0.0; 8];
-    copy(4, &x, -2, &mut y, 2);
-    assert_eq!(y, vec![7.0, 0.0, 5.0, 0.0, 3.0, 0.0, 1.0, 0.0]);
-
-    let mut y = vec![0.0; 8];
-    copy(4, &x, 2, &mut y, -1);
-    assert_eq!(y, vec![7.0, 5.0, 3.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
-
-    let mut y = vec![0.0; 8];
-    copy(3, &x, -1, &mut y, -1);
-    assert_eq!(y, vec![1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-
-    let mut y = vec![0.0; 8];
-    copy(0, &x, 1, &mut y, 1);
-    assert_eq!(y, vec![0.0; 8]);
-}
+// ─── copy ───────────────────────────────────────────────────────────────────
 
 #[test]
-#[should_panic]
-fn test_panic_copy() {
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let mut y = vec![0.0; 4];
-    copy(4, &x, 0, &mut y, 1);
-
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let mut y = vec![0.0; 4];
-    copy(4, &x, 1, &mut y, 0);
-
-    let x = vec![1.0, 2.0];
-    let mut y = vec![0.0; 4];
-    copy(4, &x, 1, &mut y, 1);
-
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let mut y = vec![0.0; 2];
-    copy(4, &x, 1, &mut y, 1);
-}
-
-#[test]
-fn test_swap() {
-    let mut x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let mut y = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0];
-
-    swap(8, &mut x, 1, &mut y, 1);
-    assert_eq!(x, vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]);
-    assert_eq!(y, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
-
-    x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    y = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0];
-    swap(4, &mut x, 2, &mut y, 2);
-    assert_eq!(x, vec![9.0, 2.0, 11.0, 4.0, 13.0, 6.0, 15.0, 8.0]);
-    assert_eq!(y, vec![1.0, 10.0, 3.0, 12.0, 5.0, 14.0, 7.0, 16.0]);
-
-    x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    y = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0];
-    swap(0, &mut x, 1, &mut y, 1);
-    assert_eq!(x, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
-    assert_eq!(y, vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]);
-
-    let mut data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let (x_slice, y_slice) = data.split_at_mut(4);
-    swap(4, x_slice, 1, y_slice, 1);
-    assert_eq!(x_slice, vec![5.0, 6.0, 7.0, 8.0]);
-    assert_eq!(y_slice, vec![1.0, 2.0, 3.0, 4.0]);
-}
-
-#[test]
-#[should_panic]
-fn test_panic_swap() {
-    let mut x = vec![1.0, 2.0, 3.0, 4.0];
-    let mut y = vec![0.0; 4];
-    swap(4, &mut x, 0, &mut y, 1);
-
-    let mut x = vec![1.0, 2.0, 3.0, 4.0];
-    let mut y = vec![0.0; 4];
-    swap(4, &mut x, 1, &mut y, 0);
-
-    let mut x = vec![1.0, 2.0];
-    let mut y = vec![0.0; 4];
-    swap(4, &mut x, 1, &mut y, 1);
-
-    let mut x = vec![1.0, 2.0, 3.0, 4.0];
-    let mut y = vec![0.0; 2];
-    swap(4, &mut x, 1, &mut y, 1);
-}
-
-#[test]
-fn test_dot() {
-    let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let y = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0];
-
-    let res = dot(8, &x, 1, &y, 1);
-    let exp = dot_checker(&x, &y);
-    assert_eq!(res, exp);
-
-    let res = dot(4, &x, 2, &y, 2);
-    let exp = x[0] * y[0] + x[2] * y[2] + x[4] * y[4] + x[6] * y[6];
-    assert_eq!(res, exp);
-
-    let res = dot(0, &x, 1, &y, 1);
-    assert_eq!(res, 0.0);
-
-    let res = dot(4, &x, -1, &y, 1);
-    let exp = x[3] * y[0] + x[2] * y[1] + x[1] * y[2] + x[0] * y[3];
-    assert_eq!(res, exp);
-
-    let res = dot(4, &x, 1, &y, -1);
-    let exp = x[0] * y[3] + x[1] * y[2] + x[2] * y[1] + x[3] * y[0];
-    assert_eq!(res, exp);
-
-    let mut gen_x = vec![0.0f32; 8192];
-    let mut gen_y = vec![0.0f32; 8192];
-
-    let mut noise = Noise::init();
-
-    noise.fill_f32(&mut gen_x);
-    noise.fill_f32(&mut gen_y);
-
-    let r = 1024;
-
-    let start = std::time::Instant::now();
-    for _ in 0..r {
-        dot(gen_x.len(), &gen_x, 1, &gen_y, 1);
+fn copy_basic_and_sizes() {
+    for n in [1, 7, 8, 9, 16, 32, 128, 256, 1024] {
+        let x: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let mut y_o = vec![0.0f32; n];
+        let mut y_m = vec![0.0f32; n];
+        copy(n, &x, 1, &mut y_o, 1);
+        mkl_copy(n, &x, 1, &mut y_m, 1);
+        assert_eq_slices(&y_o, &y_m, &format!("copy n={n}"));
     }
-    let elapsed = start.elapsed().as_secs_f64();
+}
 
-    let gflops = ((2.0 * gen_x.len() as f64 - 1.0) * r as f64) / (elapsed * 1e9);
+#[test]
+fn copy_neg_stride() {
+    let x = [1.0f32, 2.0, 3.0, 4.0];
+    let mut y_o = [0.0f32; 4];
+    let mut y_m = [0.0f32; 4];
+    copy(4, &x, -1, &mut y_o, -1);
+    mkl_copy(4, &x, -1, &mut y_m, -1);
+    assert_eq_slices(&y_o, &y_m, "copy neg stride");
+}
 
-    println!(
-        "Elapsed time: {:.6} seconds, GFLOPS: {:.2}",
-        elapsed, gflops
+#[test]
+fn copy_nonunit_stride() {
+    let x = [1.0f32, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
+    let mut y_o = [0.0f32; 8];
+    let mut y_m = [0.0f32; 8];
+    copy(4, &x, 2, &mut y_o, 2);
+    mkl_copy(4, &x, 2, &mut y_m, 2);
+    assert_eq_slices(&y_o, &y_m, "copy nonunit stride");
+}
+
+#[test]
+#[should_panic]
+fn copy_panic() {
+    let x = [1.0f32; 4];
+    let mut y = [0.0f32; 4];
+    copy(4, &x, 0, &mut y, 1);
+}
+
+// ─── swap ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn swap_basic_and_sizes() {
+    for n in [1, 7, 8, 9, 16, 128, 1024] {
+        let mut x_o: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let mut y_o: Vec<f32> = (0..n).map(|i| (i + 100) as f32).collect();
+        let mut x_m = x_o.clone();
+        let mut y_m = y_o.clone();
+        swap(n, &mut x_o, 1, &mut y_o, 1);
+        mkl_swap(n, &mut x_m, 1, &mut y_m, 1);
+        assert_eq_slices(&x_o, &x_m, &format!("swap_x n={n}"));
+        assert_eq_slices(&y_o, &y_m, &format!("swap_y n={n}"));
+    }
+}
+
+#[test]
+fn swap_neg_stride() {
+    let mut x_o = [1.0f32, 2.0, 3.0, 4.0];
+    let mut y_o = [5.0f32, 6.0, 7.0, 8.0];
+    let mut x_m = x_o;
+    let mut y_m = y_o;
+    swap(4, &mut x_o, -1, &mut y_o, -1);
+    mkl_swap(4, &mut x_m, -1, &mut y_m, -1);
+    assert_eq_slices(&x_o, &x_m, "swap neg stride x");
+    assert_eq_slices(&y_o, &y_m, "swap neg stride y");
+}
+
+#[test]
+fn swap_nonunit_stride() {
+    let mut x_o = [1.0f32, 99.0, 2.0, 99.0, 3.0];
+    let mut y_o = [5.0f32, 99.0, 6.0, 99.0, 7.0];
+    let mut x_m = x_o;
+    let mut y_m = y_o;
+    swap(3, &mut x_o, 2, &mut y_o, 2);
+    mkl_swap(3, &mut x_m, 2, &mut y_m, 2);
+    assert_eq_slices(&x_o, &x_m, "swap nonunit stride x");
+    assert_eq_slices(&y_o, &y_m, "swap nonunit stride y");
+}
+
+#[test]
+#[should_panic]
+fn swap_panic() {
+    let mut x = [1.0f32; 4];
+    let mut y = [0.0f32; 4];
+    swap(4, &mut x, 0, &mut y, 1);
+}
+
+// ─── dot ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn dot_basic_and_sizes() {
+    for n in [1, 7, 8, 9, 16, 32, 128, 256, 1024] {
+        let x: Vec<f32> = (0..n).map(|i| (i + 1) as f32 * 0.1).collect();
+        let y: Vec<f32> = (0..n).map(|i| (i + 2) as f32 * 0.1).collect();
+        assert_eq_f32(
+            dot(n, &x, 1, &y, 1),
+            mkl_dot(n, &x, 1, &y, 1),
+            &format!("dot n={n}"),
+        );
+    }
+}
+
+#[test]
+fn dot_neg_stride() {
+    let x = [1.0f32, 2.0, 3.0, 4.0];
+    let y = [5.0f32, 6.0, 7.0, 8.0];
+    assert_eq_f32(
+        dot(4, &x, -1, &y, -1),
+        mkl_dot(4, &x, -1, &y, -1),
+        "dot neg stride",
+    );
+}
+
+#[test]
+fn dot_nonunit_stride() {
+    let x = [1.0f32, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
+    let y = [4.0f32, 99.0, 5.0, 99.0, 6.0, 99.0, 7.0];
+    assert_eq_f32(
+        dot(4, &x, 2, &y, 2),
+        mkl_dot(4, &x, 2, &y, 2),
+        "dot nonunit stride",
     );
 }
 
 #[test]
 #[should_panic]
-fn test_panic_dot() {
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let y = vec![1.0, 2.0, 3.0, 4.0];
+fn dot_panic() {
+    let x = [1.0f32; 4];
+    let y = [1.0f32; 4];
     dot(4, &x, 0, &y, 1);
-
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let y = vec![1.0, 2.0, 3.0, 4.0];
-    dot(4, &x, 1, &y, 0);
-
-    let x = vec![1.0, 2.0];
-    let y = vec![1.0, 2.0, 3.0, 4.0];
-    dot(4, &x, 1, &y, 1);
-
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let y = vec![1.0, 2.0];
-    dot(4, &x, 1, &y, 1);
 }
 
-fn dot_checker(a: &[f32], b: &[f32]) -> f32 {
-    let mut sum = 0.0f32;
-    let common = a.len().min(b.len());
-    for i in 0..common {
-        sum += a[i] * b[i];
+// ─── nrm2 ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn nrm2_basic_and_sizes() {
+    for n in [1, 7, 8, 9, 16, 32, 128, 256, 1024] {
+        let x: Vec<f32> = (0..n).map(|i| (i + 1) as f32 * 0.1).collect();
+        assert_eq_f32(nrm2(n, &x, 1), mkl_nrm2(n, &x, 1), &format!("nrm2 n={n}"));
     }
-    sum
 }
 
 #[test]
-fn test_nrm2() {
-    let x = vec![3.0, 4.0];
-    let res = nrm2(2, &x, 1);
-    assert_eq!(res, 5.0);
-
-    let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let res = nrm2(8, &x, 1);
-    let exp: f32 = x.iter().map(|v| v * v).sum::<f32>().sqrt();
-    assert_eq!(res, exp);
-
-    let res = nrm2(0, &x, 1);
-    assert_eq!(res, 0.0);
-
-    let x = vec![1.0, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0];
-    let res = nrm2(4, &x, 2);
-    let exp = (1.0_f32.powi(2) + 2.0_f32.powi(2) + 3.0_f32.powi(2) + 4.0_f32.powi(2)).sqrt();
-    assert_eq!(res, exp);
-
-    let x = vec![4.0, 3.0, 2.0, 1.0];
-    let res = nrm2(4, &x, -1);
-    let exp = (4.0_f32.powi(2) + 3.0_f32.powi(2) + 2.0_f32.powi(2) + 1.0_f32.powi(2)).sqrt();
-    assert_eq!(res, exp);
+fn nrm2_neg_stride() {
+    let x = [4.0f32, 3.0, 2.0, 1.0];
+    assert_eq_f32(nrm2(4, &x, -1), mkl_nrm2(4, &x, -1), "nrm2 neg stride");
 }
 
 #[test]
 #[should_panic]
-fn test_nrm2_panic() {
-    let x = vec![1.0, 2.0];
+fn nrm2_panic() {
+    let x = [1.0f32; 2];
     nrm2(4, &x, 1);
 }
 
+// ─── asum ───────────────────────────────────────────────────────────────────
+
 #[test]
-fn test_asum() {
-    let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let res = asum(8, &x, 1);
-    let exp: f32 = x.iter().map(|v| v.abs()).sum();
-    assert_eq!(res, exp);
+fn asum_basic_and_sizes() {
+    for n in [1, 7, 8, 9, 16, 32, 128, 256, 1024] {
+        let x: Vec<f32> = (0..n)
+            .map(|i| ((i as f32) - (n as f32) / 2.0) * 0.1)
+            .collect();
+        assert_eq_f32(asum(n, &x, 1), mkl_asum(n, &x, 1), &format!("asum n={n}"));
+    }
+}
 
-    let x = vec![-1.0, -2.0, -3.0, -4.0];
-    let res = asum(4, &x, 1);
-    assert_eq!(res, 10.0);
-
-    let x = vec![-1.0, 2.0, -3.0, 4.0, -5.0, 6.0, -7.0, 8.0];
-    let res = asum(8, &x, 1);
-    let exp: f32 = x.iter().map(|v| v.abs()).sum();
-    assert_eq!(res, exp);
-
-    let x = vec![1.0, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0];
-    let res = asum(4, &x, 2);
-    assert_eq!(res, 10.0);
-
-    let x = vec![4.0, 3.0, 2.0, 1.0];
-    let res = asum(4, &x, -1);
-    assert_eq!(res, 10.0);
-
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let res = asum(0, &x, 1);
-    assert_eq!(res, 0.0);
-
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let res = asum(4, &x, 1);
-    assert_eq!(res, 10.0);
+#[test]
+fn asum_neg_stride() {
+    let x = [4.0f32, 3.0, 2.0, 1.0];
+    assert_eq_f32(asum(4, &x, -1), mkl_asum(4, &x, -1), "asum neg stride");
 }
 
 #[test]
 #[should_panic]
-fn test_asum_panic() {
-    let x = vec![1.0, 2.0, 3.0, 4.0];
+fn asum_panic() {
+    let x = [1.0f32; 4];
     asum(4, &x, 0);
-    let x = vec![1.0, 2.0];
-    asum(4, &x, 1);
+}
+
+// ─── i_amax ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn i_amax_basic_and_sizes() {
+    for n in [1, 7, 8, 9, 16, 32, 128, 256, 1024] {
+        let x: Vec<f32> = (0..n).map(|i| (i + 1) as f32 * 0.1).collect();
+        assert_eq!(i_amax(n, &x, 1), mkl_i_amax(n, &x, 1), "i_amax n={n}");
+    }
 }
 
 #[test]
-fn test_i_amax() {
-    let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let res = i_amax(8, &x, 1);
-    assert_eq!(res, 7);
-
-    let x = vec![-8.0, -7.0, -6.0, -5.0, -4.0, -3.0, -2.0, -1.0];
-    let res = i_amax(8, &x, 1);
-    assert_eq!(res, 0);
-
-    let x = vec![-1.0, 2.0, -3.0, 4.0, -5.0, 6.0, -7.0, 8.0];
-    let res = i_amax(8, &x, 1);
-    assert_eq!(res, 7);
-
-    let x = vec![1.0, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0];
-    let res = i_amax(4, &x, 2);
-    assert_eq!(res, 6);
-
-    let x = vec![4.0, 3.0, 2.0, 1.0];
-    let res = i_amax(4, &x, -1);
-    assert_eq!(res, 0);
-
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let res = i_amax(0, &x, 1);
-    assert_eq!(res, 0);
-
-    let x = vec![5.0, 5.0, 5.0, 5.0, 1.0, 2.0, 3.0, 4.0];
-    let res = i_amax(8, &x, 1);
-    assert_eq!(res, 0);
-
-    let x = vec![5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0];
-    let res = i_amax(8, &x, 1);
-    assert_eq!(res, 0);
-
-    let x = vec![-1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
-    let res = i_amax(8, &x, 1);
-    assert_eq!(res, 0);
-
-    let x = vec![-10.0, -9.0, -8.0, -7.0, -6.0, -5.0, -4.0, -3.0];
-    let res = i_amax(8, &x, 1);
-    assert_eq!(res, 0);
-
-    let x = vec![-1.0, 2.0, -3.0, 4.0, -5.0, 6.0, -7.0, 8.0];
-    let res = i_amax(8, &x, 1);
-    assert_eq!(res, 7);
-
-    let x = vec![-1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, -8.0];
-    let res = i_amax(8, &x, 1);
-    assert_eq!(res, 7);
+fn i_amax_neg_stride() {
+    let x = [1.0f32, 2.0, 3.0, 4.0];
+    // our impl returns 0-based index of max abs; MKL returns 1-based converted to 0-based
+    // both should agree on the actual array index of max abs element
+    let ours = i_amax(4, &x, -1);
+    let mkl = mkl_i_amax(4, &x, -1);
+    assert_eq!(ours, mkl, "i_amax neg stride: ours={ours}, mkl={mkl}");
 }
 
 #[test]
 #[should_panic]
-fn test_i_amax_panic() {
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    i_amax(4, &x, 0);
-    let x = vec![1.0, 2.0];
-    i_amax(4, &x, 1);
+fn i_amax_panic() {
+    let x = [1.0f32; 4];
+    i_amax(0, &x, 1);
 }
 
+// ─── i_amin ─────────────────────────────────────────────────────────────────
+
 #[test]
-fn test_i_amin() {
-    let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let res = i_amin(8, &x, 1);
-    assert_eq!(res, 0);
-
-    let x = vec![-8.0, -7.0, -6.0, -5.0, -4.0, -3.0, -2.0, -1.0];
-    let res = i_amin(8, &x, 1);
-    assert_eq!(res, 7);
-
-    let x = vec![-1.0, 2.0, -3.0, 4.0, -5.0, 6.0, -7.0, 8.0];
-    let res = i_amin(8, &x, 1);
-    assert_eq!(res, 0);
-
-    let x = vec![4.0, 0.0, 3.0, 0.0, 2.0, 0.0, 1.0, 0.0];
-    let res = i_amin(4, &x, 2);
-    assert_eq!(res, 6);
-
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let res = i_amin(4, &x, -1);
-    assert_eq!(res, 0);
-
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let res = i_amin(0, &x, 1);
-    assert_eq!(res, 0);
-
-    let x = vec![5.0, 5.0, 5.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-    let res = i_amin(8, &x, 1);
-    assert_eq!(res, 0);
-
-    let x = vec![1.0, 1.0, 1.0, 1.0, 2.0, 3.0, 4.0, 5.0];
-    let res = i_amin(8, &x, 1);
-    assert_eq!(res, 0);
-
-    let x = vec![2.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
-    let res = i_amin(8, &x, 1);
-    assert_eq!(res, 1);
-
-    let x = vec![-10.0, -9.0, -8.0, -7.0, -6.0, -5.0, -4.0, -3.0];
-    let res = i_amin(8, &x, 1);
-    assert_eq!(res, 7);
-
-    let x = vec![-8.0, 7.0, -6.0, 5.0, -4.0, 3.0, -2.0, 1.0];
-    let res = i_amin(8, &x, 1);
-    assert_eq!(res, 7);
-
-    let x = vec![-1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, -8.0];
-    let res = i_amin(8, &x, 1);
-    assert_eq!(res, 0);
+fn i_amin_basic_and_sizes() {
+    // no MKL isamin; test against our own definition
+    for n in [1, 7, 8, 9, 16, 32, 128, 256, 1024] {
+        let x: Vec<f32> = (0..n).map(|i| (i + 1) as f32 * 0.1).collect();
+        let expected = x
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.abs().partial_cmp(&b.1.abs()).unwrap())
+            .unwrap()
+            .0;
+        assert_eq!(i_amin(n, &x, 1), expected, "i_amin n={n}");
+    }
 }
 
 #[test]
 #[should_panic]
-fn test_i_amin_panic() {
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    i_amin(4, &x, 0);
-    let x = vec![1.0, 2.0];
-    i_amin(4, &x, 1);
+fn i_amin_panic() {
+    let x = [1.0f32; 4];
+    i_amin(0, &x, 1);
+}
+
+// ─── rot ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn rot_basic_and_sizes() {
+    for n in [1, 7, 8, 9, 16, 128, 1024] {
+        let mut x_o: Vec<f32> = (0..n).map(|i| (i + 1) as f32 * 0.1).collect();
+        let mut y_o: Vec<f32> = (0..n).map(|i| (i + 10) as f32 * 0.1).collect();
+        let mut x_m = x_o.clone();
+        let mut y_m = y_o.clone();
+        rot(n, &mut x_o, 1, &mut y_o, 1, 0.6, 0.8);
+        mkl_rot(n, &mut x_m, 1, &mut y_m, 1, 0.6, 0.8);
+        assert_eq_slices(&x_o, &x_m, &format!("rot_x n={n}"));
+        assert_eq_slices(&y_o, &y_m, &format!("rot_y n={n}"));
+    }
 }
 
 #[test]
-fn test_rot() {
-    let mut x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let mut y = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let orig_x = x.clone();
-    let orig_y = y.clone();
-    let (c, s) = (1.0, 0.0);
+fn rot_neg_stride() {
+    let mut x_o = [1.0f32, 2.0, 3.0, 4.0];
+    let mut y_o = [4.0f32, 3.0, 2.0, 1.0];
+    let mut x_m = x_o;
+    let mut y_m = y_o;
+    rot(4, &mut x_o, -1, &mut y_o, -1, 0.6, 0.8);
+    mkl_rot(4, &mut x_m, -1, &mut y_m, -1, 0.6, 0.8);
+    assert_eq_slices(&x_o, &x_m, "rot neg stride x");
+    assert_eq_slices(&y_o, &y_m, "rot neg stride y");
+}
 
-    rot(8, &mut x, 1, &mut y, 1, c, s);
-    assert_eq!(x, orig_x);
-    assert_eq!(y, orig_y);
-    x.fill(0.0);
-    y.fill(0.0);
-
-    x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    y = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let (c, s) = (-1.0, 0.0);
-
-    rot(8, &mut x, 1, &mut y, 1, c, s);
-    assert_eq!(x, vec![-1.0, -2.0, -3.0, -4.0, -5.0, -6.0, -7.0, -8.0]);
-    assert_eq!(y, vec![-1.0, -2.0, -3.0, -4.0, -5.0, -6.0, -7.0, -8.0]);
-    x.fill(0.0);
-    y.fill(0.0);
-
-    x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    y = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let (c, s) = (0.0, 1.0);
-
-    rot(8, &mut x, 1, &mut y, 1, c, s);
-    assert_eq!(x, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
-    assert_eq!(y, vec![-1.0, -2.0, -3.0, -4.0, -5.0, -6.0, -7.0, -8.0]);
-    x.fill(0.0);
-    y.fill(0.0);
-
-    x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-    y = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-    rot(4, &mut x, 2, &mut y, 2, 1.0, 0.0);
-    assert_eq!(x, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
-    assert_eq!(y, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+#[test]
+fn rot_nonunit_stride() {
+    let mut x_o = [1.0f32, 99.0, 2.0, 99.0, 3.0];
+    let mut y_o = [4.0f32, 99.0, 5.0, 99.0, 6.0];
+    let mut x_m = x_o;
+    let mut y_m = y_o;
+    rot(3, &mut x_o, 2, &mut y_o, 2, 0.6, 0.8);
+    mkl_rot(3, &mut x_m, 2, &mut y_m, 2, 0.6, 0.8);
+    assert_eq_slices(&x_o, &x_m, "rot nonunit stride x");
+    assert_eq_slices(&y_o, &y_m, "rot nonunit stride y");
 }
 
 #[test]
 #[should_panic]
-fn test_rot_panic() {
-    let mut x = vec![1.0, 2.0];
-    let mut y = vec![1.0, 2.0];
-    rot(0, &mut x, 1, &mut y, 1, 1.0, 0.0);
-    let mut x = vec![1.0, 2.0];
-    let mut y = vec![1.0, 2.0];
+fn rot_panic() {
+    let mut x = [1.0f32; 2];
+    let mut y = [1.0f32; 2];
     rot(2, &mut x, 0, &mut y, 1, 1.0, 0.0);
-
-    let mut x = vec![1.0, 2.0];
-    let mut y = vec![1.0, 2.0];
-    rot(2, &mut x, 1, &mut y, 0, 1.0, 0.0);
-
-    let mut x = vec![1.0, 2.0];
-    let mut y = vec![1.0, 2.0, 3.0, 4.0];
-    rot(4, &mut x, 1, &mut y, 1, 1.0, 0.0);
-
-    let mut x = vec![1.0, 2.0, 3.0, 4.0];
-    let mut y = vec![1.0, 2.0];
-    rot(4, &mut x, 1, &mut y, 1, 1.0, 0.0);
 }
 
+// ─── rotg ───────────────────────────────────────────────────────────────────
+
 #[test]
-fn test_rotg() {
-    let mut a = 3.0f32;
-    let mut b = 4.0f32;
-    let mut c = 0.0f32;
-    let mut s = 0.0f32;
-    rotg(&mut a, &mut b, &mut c, &mut s);
-    assert_eq!(a, 5.0);
-    assert_eq!(c, 0.6);
-    assert_eq!(s, 0.8);
-    assert!((b - 1.6666666).abs() < 1e-5);
-
-    let mut a = 0.0f32;
-    let mut b = 4.0f32;
-    let mut c = 0.0f32;
-    let mut s = 0.0f32;
-    rotg(&mut a, &mut b, &mut c, &mut s);
-    assert_eq!(a, 4.0);
-    assert_eq!(c, 0.0);
-    assert_eq!(s, 1.0);
-    assert_eq!(b, 1.0);
-
-    let mut a = 3.0f32;
-    let mut b = 0.0f32;
-    let mut c = 0.0f32;
-    let mut s = 0.0f32;
-    rotg(&mut a, &mut b, &mut c, &mut s);
-    assert_eq!(a, 3.0);
-    assert_eq!(c, 1.0);
-    assert_eq!(s, 0.0);
-    assert_eq!(b, 0.0);
-
-    let mut a = 0.0f32;
-    let mut b = 0.0f32;
-    let mut c = 0.0f32;
-    let mut s = 0.0f32;
-    rotg(&mut a, &mut b, &mut c, &mut s);
-    assert_eq!(c, 1.0);
-    assert_eq!(s, 0.0);
-    assert_eq!(a, 0.0);
-    assert_eq!(b, 0.0);
-
-    let mut a = -3.0f32;
-    let mut b = 4.0f32;
-    let mut c = 0.0f32;
-    let mut s = 0.0f32;
-    rotg(&mut a, &mut b, &mut c, &mut s);
-    assert_eq!(a, 5.0);
-    assert_eq!(c, -0.6);
-    assert_eq!(s, 0.8);
-
-    let mut a = 4.0f32;
-    let mut b = 3.0f32;
-    let mut c = 0.0f32;
-    let mut s = 0.0f32;
-    rotg(&mut a, &mut b, &mut c, &mut s);
-    assert_eq!(a, 5.0);
-    assert_eq!(c, 0.8);
-    assert_eq!(s, 0.6);
-    assert_eq!(b, 0.6);
-
-    let mut a = 3.0f32;
-    let mut b = 4.0f32;
-    let mut c = 0.0f32;
-    let mut s = 0.0f32;
-    rotg(&mut a, &mut b, &mut c, &mut s);
-    let r = a;
-    assert!((c * c + s * s - 1.0).abs() < 1e-5, "c^2 + s^2 should be ~1");
-    assert!((c * r - 3.0).abs() < 1e-5, "c*r should be ~3");
-    assert!((s * r - 4.0).abs() < 1e-5, "s*r should be ~4");
+fn rotg_basic_and_sizes() {
+    let cases = [
+        (3.0f32, 4.0f32),
+        (0.0, 4.0),
+        (3.0, 0.0),
+        (0.0, 0.0),
+        (-3.0, 4.0),
+        (4.0, 3.0),
+        (5.0, -12.0),
+        (1.0, 1.0),
+        (-7.0, -24.0),
+    ];
+    for (a_in, b_in) in cases {
+        let (mut ao, mut bo, mut co, mut so) = (a_in, b_in, 0.0, 0.0);
+        let (mut am, mut bm, mut cm, mut sm) = (a_in, b_in, 0.0, 0.0);
+        rotg(&mut ao, &mut bo, &mut co, &mut so);
+        mkl_rotg(&mut am, &mut bm, &mut cm, &mut sm);
+        assert_eq_f32(ao, am, &format!("rotg({a_in},{b_in}) a"));
+        assert_eq_f32(bo, bm, &format!("rotg({a_in},{b_in}) b"));
+        assert_eq_f32(co, cm, &format!("rotg({a_in},{b_in}) c"));
+        assert_eq_f32(so, sm, &format!("rotg({a_in},{b_in}) s"));
+    }
 }
