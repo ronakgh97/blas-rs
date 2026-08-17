@@ -3,29 +3,56 @@
 use std::arch::x86_64::{
     __cpuid_count, __m256i, _mm_cvtsi128_si64, _mm_unpackhi_epi64, _mm_xor_si128, _mm256_add_epi64,
     _mm256_castsi256_si128, _mm256_cvtepi32_ps, _mm256_extract_epi64, _mm256_extracti128_si256,
-    _mm256_loadu_ps, _mm256_mul_epu32, _mm256_mul_ps, _mm256_permute2f128_ps, _mm256_set_epi64x,
-    _mm256_set1_epi64x, _mm256_set1_ps, _mm256_shuffle_ps, _mm256_slli_epi64, _mm256_srli_epi64,
-    _mm256_storeu_ps, _mm256_storeu_si256, _mm256_unpackhi_ps, _mm256_unpacklo_ps,
-    _mm256_xor_si256,
+    _mm256_loadu_ps, _mm256_mul_ps, _mm256_or_si256, _mm256_permute2f128_ps, _mm256_set_epi64x,
+    _mm256_set1_ps, _mm256_shuffle_ps, _mm256_slli_epi64, _mm256_srli_epi64, _mm256_storeu_ps,
+    _mm256_storeu_si256, _mm256_unpackhi_ps, _mm256_unpacklo_ps, _mm256_xor_si256,
 };
 
-/// A simple random noise generator using [`splitmix64`](https://xoshiro.di.unimi.it/splitmix64.c) algorithm with AVX2 support.
-/// It generates random numbers in parallel using SIMD instructions.
+/// A simple random noise generator using [`xorshiro256PlusPlus`](https://prng.di.unimi.it/xoshiro256plusplus.c) algorithm with AVX2 support.
 #[derive(Clone)]
 pub struct Noise {
-    state: __m256i,
+    s0: __m256i,
+    s1: __m256i,
+    s2: __m256i,
+    s3: __m256i,
 }
 
 impl Noise {
     /// Initializes the noise generator with a random seed from the OS RNG
-    pub fn init() -> Self {
-        let rand_seed0 = rand::random::<i64>();
-        let rand_seed1 = rand::random::<i64>();
-        let rand_seed2 = rand::random::<i64>();
-        let rand_seed3 = rand::random::<i64>();
-
+    pub fn rng() -> Self {
         Self {
-            state: unsafe { _mm256_set_epi64x(rand_seed3, rand_seed2, rand_seed1, rand_seed0) },
+            s0: unsafe {
+                _mm256_set_epi64x(
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                )
+            },
+            s1: unsafe {
+                _mm256_set_epi64x(
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                )
+            },
+            s2: unsafe {
+                _mm256_set_epi64x(
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                )
+            },
+            s3: unsafe {
+                _mm256_set_epi64x(
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                    rand::random::<i64>(),
+                )
+            },
         }
     }
 
@@ -35,9 +62,12 @@ impl Noise {
         let seed1 = seed.wrapping_mul(0x9e3779b97f4a7c15) as i64;
         let seed2 = seed.wrapping_mul(0xbf58476d1ce4e5b9) as i64;
         let seed3 = seed.wrapping_mul(0x94d049bb133111eb) as i64;
-
         Self {
-            state: unsafe { _mm256_set_epi64x(seed3, seed2, seed1, seed0) },
+            // cool shit
+            s0: unsafe { _mm256_set_epi64x(seed3, seed2, seed1, seed0) },
+            s1: unsafe { _mm256_set_epi64x(seed3 ^ seed2, seed3, seed2, seed1) },
+            s2: unsafe { _mm256_set_epi64x(seed3 ^ seed2, seed3 ^ seed2, seed3, seed2) },
+            s3: unsafe { _mm256_set_epi64x(seed3 ^ seed2, seed3 ^ seed2, seed3 ^ seed2, seed3) },
         }
     }
 
@@ -45,33 +75,29 @@ impl Noise {
     #[inline(always)]
     pub fn next_u64s(&mut self) -> (u64, u64, u64, u64) {
         unsafe {
-            let m0 = _mm256_set1_epi64x(0x9e3779b97f4a7c15_u64 as i64);
-            let m1 = _mm256_set1_epi64x(0xbf58476d1ce4e5b9_u64 as i64);
-            let m2 = _mm256_set1_epi64x(0x94d049bb133111eb_u64 as i64);
+            // result = s0 + s3
+            let result = _mm256_add_epi64(self.s0, self.s3);
+            // t = s1 << 17
+            let t = _mm256_slli_epi64(self.s1, 17);
 
-            // z = state += m0
-            self.state = _mm256_add_epi64(self.state, m0);
-            let mut z = self.state;
+            // update state
+            self.s2 = _mm256_xor_si256(self.s2, self.s0);
+            self.s3 = _mm256_xor_si256(self.s3, self.s1);
+            self.s1 = _mm256_xor_si256(self.s1, self.s2);
+            self.s0 = _mm256_xor_si256(self.s0, self.s3);
 
-            // z = (z ^ (z >> 30)) * m1
-            let shift30 = _mm256_srli_epi64(z, 30);
-            z = _mm256_xor_si256(z, shift30);
-            z = Self::mul_u64x4(z, m1);
+            self.s2 = _mm256_xor_si256(self.s2, t);
+            // rotate
+            self.s3 = _mm256_or_si256(
+                _mm256_srli_epi64(self.s3, 45),
+                _mm256_slli_epi64(self.s3, 64 - 45),
+            );
 
-            // z = (z ^ (z >> 27)) * m2
-            let shift27 = _mm256_srli_epi64(z, 27);
-            z = _mm256_xor_si256(z, shift27);
-            z = Self::mul_u64x4(z, m2);
-
-            // z ^ (z >> 31)
-            let shift31 = _mm256_srli_epi64(z, 31);
-            z = _mm256_xor_si256(z, shift31);
-
-            // extract the four results (extracts are slower, but fine for now)
-            let r0 = _mm256_extract_epi64::<0>(z) as u64;
-            let r1 = _mm256_extract_epi64::<1>(z) as u64;
-            let r2 = _mm256_extract_epi64::<2>(z) as u64;
-            let r3 = _mm256_extract_epi64::<3>(z) as u64;
+            // extract & ret
+            let r0 = _mm256_extract_epi64::<0>(result) as u64;
+            let r1 = _mm256_extract_epi64::<1>(result) as u64;
+            let r2 = _mm256_extract_epi64::<2>(result) as u64;
+            let r3 = _mm256_extract_epi64::<3>(result) as u64;
 
             (r0, r1, r2, r3)
         }
@@ -81,58 +107,25 @@ impl Noise {
     #[inline(always)]
     pub fn next_state(&mut self) -> __m256i {
         unsafe {
-            let m0 = _mm256_set1_epi64x(0x9e3779b97f4a7c15_u64 as i64);
-            let m1 = _mm256_set1_epi64x(0xbf58476d1ce4e5b9_u64 as i64);
-            let m2 = _mm256_set1_epi64x(0x94d049bb133111eb_u64 as i64);
+            // result = s0 + s3
+            let result = _mm256_add_epi64(self.s0, self.s3);
+            // t = s1 << 17
+            let t = _mm256_slli_epi64(self.s1, 17);
 
-            // z = state += m0
-            self.state = _mm256_add_epi64(self.state, m0);
-            let mut z = self.state;
+            // update state
+            self.s2 = _mm256_xor_si256(self.s2, self.s0);
+            self.s3 = _mm256_xor_si256(self.s3, self.s1);
+            self.s1 = _mm256_xor_si256(self.s1, self.s2);
+            self.s0 = _mm256_xor_si256(self.s0, self.s3);
 
-            // z = (z ^ (z >> 30)) * m1
-            let shift30 = _mm256_srli_epi64(z, 30);
-            z = _mm256_xor_si256(z, shift30);
-            z = Self::mul_u64x4(z, m1);
+            self.s2 = _mm256_xor_si256(self.s2, t);
+            // rotate
+            self.s3 = _mm256_or_si256(
+                _mm256_srli_epi64(self.s3, 45),
+                _mm256_slli_epi64(self.s3, 64 - 45),
+            );
 
-            // z = (z ^ (z >> 27)) * m2
-            let shift27 = _mm256_srli_epi64(z, 27);
-            z = _mm256_xor_si256(z, shift27);
-            z = Self::mul_u64x4(z, m2);
-
-            // z ^ (z >> 31)
-            let shift31 = _mm256_srli_epi64(z, 31);
-            z = _mm256_xor_si256(z, shift31);
-            z
-        }
-    }
-
-    // TODO: THIS SHIT IS SO WEIRD!!!
-    /// Wrap-multiplies two `__m256i` vectors containing 4 packed `u64` integers each by `mod(2^64)`, returning `__m256i` vector with the results.
-    #[inline(always)]
-    fn mul_u64x4(a: __m256i, b: __m256i) -> __m256i {
-        // ab = a_lo*b_lo + (a_lo*b_hi + a_hi*b_lo)2^32 + [- (a_hi*b_hi)2^64 -]
-        unsafe {
-            // a_lo * b_lo
-            let alo_blo = _mm256_mul_epu32(a, b);
-
-            // shift both right by 32 bits to get the upper 32 bits
-            let a_hi = _mm256_srli_epi64(a, 32);
-            let b_hi = _mm256_srli_epi64(b, 32);
-
-            // a_lo * b_hi
-            let cross1 = _mm256_mul_epu32(a, b_hi);
-
-            // a_hi * b_lo
-            let cross2 = _mm256_mul_epu32(a_hi, b);
-
-            // a_lo*b_hi + a_hi*b_lo
-            let cross = _mm256_add_epi64(cross1, cross2);
-
-            // shift left by 32 bits to place in the correct position
-            let cross = _mm256_slli_epi64(cross, 32);
-
-            // low 64 bits of a*b
-            _mm256_add_epi64(alo_blo, cross)
+            result
         }
     }
 
@@ -169,7 +162,7 @@ impl Noise {
         // fill the buffer in chunks of 32 floats (8 * 4 floats)
         let scale = unsafe { _mm256_set1_ps(1.0 / (1u64 << 31) as f32) };
         let mut chunks_32 = buf.chunks_exact_mut(32);
-        while let Some(chunk) = chunks_32.next() {
+        for chunk in chunks_32.by_ref() {
             unsafe {
                 let l0 = self.next_state();
                 let l1 = self.next_state();
@@ -202,7 +195,7 @@ impl Noise {
 
         // fill the remaining buffer in chunks of 8 floats (2 * 4 floats)
         let mut chunk_8 = chunks_32.into_remainder().chunks_exact_mut(8);
-        while let Some(chunk) = chunk_8.next() {
+        for chunk in chunk_8.by_ref() {
             unsafe {
                 let l0 = self.next_state();
                 let l0_f32 = _mm256_cvtepi32_ps(l0);
@@ -231,7 +224,9 @@ impl Noise {
 
             // fill the remaining floats with scaled values
             for i in 0..rem.len() {
-                rem[i] = split[i] as f32 * scale_scalar;
+                unsafe {
+                    *rem.get_unchecked_mut(i) = *split.get_unchecked(i) as f32 * scale_scalar;
+                }
             }
         }
     }
@@ -241,7 +236,7 @@ impl Noise {
     pub fn fill_bytes(&mut self, buf: &mut [u8]) {
         // fill the buffer in chunks of 128 bytes (4 * 32 bytes)
         let mut chunks_128 = buf.chunks_exact_mut(128);
-        while let Some(chunk) = chunks_128.next() {
+        for chunk in chunks_128.by_ref() {
             unsafe {
                 let l0 = self.next_state();
                 let l1 = self.next_state();
@@ -257,18 +252,18 @@ impl Noise {
 
         // fill the remaining bytes in chunks of 32 bytes
         let mut chunks_32 = chunks_128.into_remainder().chunks_exact_mut(32);
-        while let Some(chunk) = chunks_32.next() {
+        for chunk in chunks_32.by_ref() {
             unsafe {
                 let l0 = self.next_state();
                 _mm256_storeu_si256(chunk.as_mut_ptr() as *mut __m256i, l0);
             }
         }
 
-        // fill any remaining bytes (less than 32) using a single u64
+        // fill any remaining bytes (less than 32) using exactly one u64
         let rem = chunks_32.into_remainder();
         if !rem.is_empty() {
             let (r, _, _, _) = self.next_u64s();
-            let bytes = r.to_ne_bytes();
+            let bytes: [u8; 8] = r.to_ne_bytes();
             rem.copy_from_slice(&bytes[..rem.len()]);
         }
     }
@@ -276,15 +271,26 @@ impl Noise {
 
 #[test]
 fn test_f32_fill() {
-    let mut noise = Noise::init();
+    use core::arch::x86_64::*;
+    let mut noise = Noise::rng();
     let mut buf = vec![0.0f32; 999_999_999];
     let strt = std::time::Instant::now();
+    let clock_start_mark = unsafe {
+        _mm_lfence();
+        _rdtsc()
+    };
     noise.fill_f32(&mut buf);
     let elp = strt.elapsed();
+    let clock_end_mark = unsafe {
+        let e = __rdtscp(&mut 0);
+        _mm_lfence();
+        e
+    };
     println!(
-        "Generated {} random numbers in {:?} seconds",
+        "Generated {} random numbers in {:?} seconds, cycle cost/number: {}",
         buf.len(),
-        elp.as_secs_f32()
+        elp.as_secs_f32(),
+        (clock_end_mark - clock_start_mark) / buf.len() as u64
     );
     assert!(buf.iter().all(|&x| (-1.0..=1.0).contains(&x)));
 }
@@ -368,7 +374,7 @@ fn test_simd_reduce() {
     const LANE: usize = 8;
     const RUN: usize = 512 * 512; // ~2MB
 
-    let mut noise = Noise::init();
+    let mut noise = Noise::rng();
 
     let sample = {
         let mut vec = vec![0.0f32; LANE * RUN]; // heap is fine here
@@ -379,12 +385,12 @@ fn test_simd_reduce() {
     unsafe {
         // native way
         let (ntv_cycle_c, ntv_elapsed) = {
+            let time = Instant::now();
             // start
             let clock_start_mark = {
                 _mm_lfence();
                 _rdtsc()
             };
-            let time = Instant::now();
 
             for i in 0..RUN {
                 // for simplicity and avoiding obvious `stack-spill`
@@ -411,12 +417,12 @@ fn test_simd_reduce() {
 
         // opt way
         let (opt_cycle_c, opt_elapsed) = {
+            let time = Instant::now();
             // start
             let clock_start_mark = {
                 _mm_lfence();
                 _rdtsc()
             };
-            let time = Instant::now();
 
             for i in 0..RUN {
                 let load_reg = _mm256_loadu_ps(sample.as_ptr().add(i * LANE));
@@ -548,7 +554,7 @@ fn test_mat_transpose() {
     let cols = 1536;
     let size = rows * cols;
 
-    let mut noise = Noise::init();
+    let mut noise = Noise::rng();
     let mut src = vec![0.0f32; size];
     noise.fill_f32(&mut src);
     let mut dest = vec![0.0f32; size];
