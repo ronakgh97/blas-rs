@@ -1,5 +1,7 @@
 //! Implementation of Level 1 BLAS routines
-use crate::utils::{reduce_add, reduce_max};
+use crate::{reduce_add, reduce_max};
+use std::arch::x86_64::_mm256_setr_epi32;
+#[allow(unused)]
 use std::arch::x86_64::{
     __m256i, _CMP_GT_OQ, _CMP_LT_OQ, _MM_HINT_ET0, _MM_HINT_NTA, _MM_HINT_T0, _MM_HINT_T2,
     _mm_prefetch, _mm256_add_epi32, _mm256_add_ps, _mm256_and_ps, _mm256_blendv_epi8,
@@ -86,18 +88,18 @@ pub(crate) unsafe fn axpy_unsafe(
 
                 i += 32;
 
-                {
-                    _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
-                }
+                // {
+                //     _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
+                //     _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
+                // }
             }
 
             // Handle one AVX register at a time.
             while i + 8 <= n {
-                let x0 = _mm256_loadu_ps(x_ptr.add(i));
-                let y0 = _mm256_loadu_ps(y_ptr.add(i));
-                let res0 = _mm256_fmadd_ps(alpha_x8, x0, y0);
-                _mm256_storeu_ps(y_ptr.add(i), res0);
+                let x = _mm256_loadu_ps(x_ptr.add(i));
+                let y = _mm256_loadu_ps(y_ptr.add(i));
+                let res = _mm256_fmadd_ps(alpha_x8, x, y);
+                _mm256_storeu_ps(y_ptr.add(i), res);
                 i += 8;
             }
 
@@ -123,7 +125,8 @@ pub(crate) unsafe fn axpy_unsafe(
             };
 
             // Y += alpha * X
-            for _ in 0..(n / 4) {
+            let mut i = 0;
+            while i + 4 <= n {
                 // process 4 elements per iter
                 let x_val = *x_ptr.offset(ix);
                 let y_val = *y_ptr.offset(iy);
@@ -148,14 +151,18 @@ pub(crate) unsafe fn axpy_unsafe(
                 *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
                 ix += incx;
                 iy += incy;
+
+                i += 4;
             }
 
-            for _ in 0..(n % 4) {
+            while i < n {
                 let x_val = *x_ptr.offset(ix);
                 let y_val = *y_ptr.offset(iy);
                 *y_ptr.offset(iy) = alpha.mul_add(x_val, y_val);
                 ix += incx;
                 iy += incy;
+
+                i += 1;
             }
         }
     }
@@ -324,6 +331,7 @@ pub(crate) unsafe fn copy_unsafe(n: usize, x: &[f32], incx: i32, y: &mut [f32], 
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
             let mut iy = if incy < 0 { (1 - n as isize) * incy } else { 0 };
 
+            // unroll the loop to copy 4 elements at a time for better perf?
             let mut i = 0;
             while i + 4 <= n {
                 *y_ptr.offset(iy) = *x_ptr.offset(ix);
@@ -407,6 +415,7 @@ pub(crate) unsafe fn swap_unsafe(n: usize, x: &mut [f32], incx: i32, y: &mut [f3
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
             let mut iy = if incy < 0 { (1 - n as isize) * incy } else { 0 };
 
+            // swap 4 elements at a time
             let mut i = 0;
             while i + 4 <= n {
                 let tmp0 = *x_ptr.offset(ix);
@@ -507,8 +516,10 @@ pub(crate) unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy:
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_T0);
-                _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_T0);
+                // {
+                //     _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_T0);
+                //     _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_T0);
+                // }
             }
 
             while i + 8 <= n {
@@ -520,8 +531,8 @@ pub(crate) unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy:
 
             // add & reduce
             let sum = _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3));
+            let mut result = reduce_add!(sum);
 
-            let mut result = reduce_add(sum);
             while i < n {
                 let x_val = *x_ptr.add(i);
                 let y_val = *y_ptr.add(i);
@@ -542,7 +553,8 @@ pub(crate) unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy:
             let mut sum3 = 0.0f32;
 
             // Have four accumulators to allow for some level of parallelism
-            for _ in 0..(n / 4) {
+            let mut i = 0;
+            while i + 4 <= n {
                 let x_val = *x_ptr.offset(ix);
                 let y_val = *y_ptr.offset(iy);
                 sum0 = x_val.mul_add(y_val, sum0);
@@ -566,18 +578,22 @@ pub(crate) unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy:
                 sum3 = x_val.mul_add(y_val, sum3);
                 ix += incx;
                 iy += incy;
+
+                i += 4;
             }
 
             // Handle remaining elements
-            for _ in 0..(n % 4) {
+            while i < n {
                 let x_val = *x_ptr.offset(ix);
                 let y_val = *y_ptr.offset(iy);
                 sum0 = x_val.mul_add(y_val, sum0);
                 ix += incx;
                 iy += incy;
+
+                i += 4;
             }
 
-            sum0 + sum1 + sum2 + sum3
+            (sum0 + sum1) + (sum2 + sum3)
         }
     }
 }
@@ -617,7 +633,7 @@ pub(crate) unsafe fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
 
             // find maximum absolute value (scale) to prevent overflow
             // nrm2 = scale * sqrt(sum((x[i]/scale)^2))
-            let mut i = 0usize;
+            let mut i: usize = 0;
             let mut scale0 = _mm256_setzero_ps();
             let mut scale1 = _mm256_setzero_ps();
             let mut scale2 = _mm256_setzero_ps();
@@ -648,19 +664,19 @@ pub(crate) unsafe fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
             }
 
             // reduce max
-            let mut scale = reduce_max(combined);
+            let mut scale = reduce_max!(combined);
             // handle remaining elements (when n % 8 != 0 and n < 32)
             while i < n {
-                scale = scale.max(x.get_unchecked(i).abs());
+                scale = scale.max((*x_ptr.add(i)).abs());
                 i += 1;
             }
 
-            if scale == 0.0 {
+            if scale == 0.0 && scale == f32::INFINITY {
                 return 0.0;
             }
 
             // compute sum of (x[i]/scale)^2
-            i = 0;
+            let mut i: usize = 0;
             let mut sum0 = _mm256_setzero_ps();
             let mut sum1 = _mm256_setzero_ps();
             let mut sum2 = _mm256_setzero_ps();
@@ -682,7 +698,9 @@ pub(crate) unsafe fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 64) as *const i8, _MM_HINT_T2);
+                // {
+                //     _mm_prefetch(x_ptr.add(i + 64) as *const i8, _MM_HINT_T2);
+                // }
             }
 
             let mut sum = _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3));
@@ -692,11 +710,13 @@ pub(crate) unsafe fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
                 i += 8;
             }
 
-            let mut result = reduce_add(sum);
+            let mut result = reduce_add!(sum);
+
+            let inv_scale = 1.0 / scale;
 
             // handle remaining
             while i < n {
-                let xi = x.get_unchecked(i) / scale;
+                let xi = *x_ptr.add(i) * inv_scale;
                 result = xi.mul_add(xi, result);
                 i += 1;
             }
@@ -723,7 +743,8 @@ pub(crate) unsafe fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
             // compute sum of (x[i]/scale)^2
             ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
             let mut sum: f32 = 0.0;
-            i = 0;
+
+            let mut i = 0usize;
             while i + 4 <= n {
                 let x0 = *x_ptr.offset(ix) / scale;
                 let x1 = *x_ptr.offset(ix + incx) / scale;
@@ -775,19 +796,19 @@ pub fn asum(n: usize, x: &[f32], incx: i32) -> f32 {
 pub(crate) unsafe fn asum_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
     let x_ptr = x.as_ptr();
 
-    if incx == 1 {
-        let mut i = 0;
+    unsafe {
+        if incx == 1 {
+            let mut i = 0;
 
-        let mut sum0 = unsafe { _mm256_setzero_ps() };
-        let mut sum1 = unsafe { _mm256_setzero_ps() };
-        let mut sum2 = unsafe { _mm256_setzero_ps() };
-        let mut sum3 = unsafe { _mm256_setzero_ps() };
+            let mut sum0 = _mm256_setzero_ps();
+            let mut sum1 = _mm256_setzero_ps();
+            let mut sum2 = _mm256_setzero_ps();
+            let mut sum3 = _mm256_setzero_ps();
 
-        // Mask to clear the sign bit, effectively computing absolute value: [0x7fffffff, 0x7fffffff, ...8 times]
-        let mask = unsafe { _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff)) };
+            // Mask to clear the sign bit, effectively computing absolute value: [0x7fffffff, 0x7fffffff, ...8 times]
+            let mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff));
 
-        while i + 32 <= n {
-            unsafe {
+            while i + 32 <= n {
                 let x0 = _mm256_loadu_ps(x_ptr.add(i));
                 let x1 = _mm256_loadu_ps(x_ptr.add(i + 8));
                 let x2 = _mm256_loadu_ps(x_ptr.add(i + 16));
@@ -806,37 +827,35 @@ pub(crate) unsafe fn asum_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
 
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_NTA);
+                // {
+                //     _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_NTA);
+                // }
             }
-        }
 
-        while i + 8 <= n {
-            unsafe {
+            while i + 8 <= n {
                 let x = _mm256_loadu_ps(x_ptr.add(i));
                 let abs_x = _mm256_and_ps(x, _mm256_set1_ps(f32::from_bits(0x7FFFFFFF)));
                 sum0 = _mm256_add_ps(sum0, abs_x);
                 i += 8;
             }
-        }
 
-        // sum them up!
-        let sum = unsafe { _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3)) };
+            // sum them up!
+            let sum = _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3));
 
-        let mut result = reduce_add(sum); // reduce
-        while i < n {
-            result += unsafe { x.get_unchecked(i).abs() };
-            i += 1;
-        }
-        result
-    } else {
-        let incx = incx as isize;
-        let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
-        let x_ptr = x.as_ptr();
-        let mut sum = 0.0f32;
+            let mut result = reduce_add!(sum); // reduce
+            while i < n {
+                result += (*x_ptr.add(i)).abs();
+                i += 1;
+            }
+            result
+        } else {
+            let incx = incx as isize;
+            let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
+            let x_ptr = x.as_ptr();
+            let mut sum = 0.0f32;
 
-        let mut i = 0usize;
-        while i + 4 <= n {
-            unsafe {
+            let mut i = 0usize;
+            while i + 4 <= n {
                 let v0 = *x_ptr.offset(ix);
                 let v1 = *x_ptr.offset(ix + incx);
                 let v2 = *x_ptr.offset(ix + 2 * incx);
@@ -846,28 +865,26 @@ pub(crate) unsafe fn asum_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
                 sum += v2.abs();
                 sum += v3.abs();
                 ix += 4 * incx;
+                i += 4;
             }
-            i += 4;
-        }
 
-        while i < n {
-            unsafe {
+            while i < n {
                 sum += (*x_ptr.offset(ix)).abs();
                 ix += incx;
+                i += 1;
             }
-            i += 1;
-        }
 
-        sum
+            sum
+        }
     }
 }
 
 #[inline(always)]
-/// The iamax routines return an index i such that x\[i\] has the maximum absolute value of all elements in vector x.
+/// The iamax routines return an index i such that 'x\[i\]' has the maximum absolute value of all elements in vector x. _(DOES NOT HANDLE NAN)_
 /// [ref](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/iamax.html) for more details
 pub fn i_amax(n: usize, x: &[f32], incx: i32) -> usize {
     if n == 0 {
-        return 0;
+        panic!("n must be greater than 0");
     }
 
     if incx == 0 {
@@ -884,27 +901,30 @@ pub fn i_amax(n: usize, x: &[f32], incx: i32) -> usize {
 #[inline(always)]
 #[allow(clippy::missing_safety_doc)]
 pub(crate) unsafe fn i_amax_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
-    if incx == 1 {
-        unsafe {
+    unsafe {
+        if incx == 1 {
             let x_ptr = x.as_ptr();
 
             // Create mask [0x7fffffff, 0x7fffffff, ...8 times]
             let mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff));
 
-            let base_idx = _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+            // Lane order for indices, will be added to base index to get the actual index of the max value
+            let base_idx = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
 
             // Init max trackers to -inf so any valid absolute value overwrites it,
             // I hope this doesn't cause any issues later :(
-            let mut la_vals0 = _mm256_set1_ps(-f32::INFINITY);
+            let neg_inf_lane = _mm256_set1_ps(-f32::INFINITY);
+
+            let mut la_vals0 = neg_inf_lane;
             let mut la_idxs0 = _mm256_setzero_si256();
 
-            let mut la_vals1 = _mm256_set1_ps(-f32::INFINITY);
+            let mut la_vals1 = neg_inf_lane;
             let mut la_idxs1 = _mm256_setzero_si256();
 
-            let mut la_vals2 = _mm256_set1_ps(-f32::INFINITY);
+            let mut la_vals2 = neg_inf_lane;
             let mut la_idxs2 = _mm256_setzero_si256();
 
-            let mut la_vals3 = _mm256_set1_ps(-f32::INFINITY);
+            let mut la_vals3 = neg_inf_lane;
             let mut la_idxs3 = _mm256_setzero_si256();
 
             // pre-index to reduce broadcast
@@ -962,49 +982,57 @@ pub(crate) unsafe fn i_amax_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
                 idx2 = _mm256_add_epi32(idx2, thirty_two);
                 idx3 = _mm256_add_epi32(idx3, thirty_two);
 
-                _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_NTA);
+                // {
+                //     _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_NTA);
+                // }
             }
 
+            // Tree reduction of the 4 max values and their indices to a single max value and index
             let cmp01 = _mm256_cmp_ps(la_vals1, la_vals0, _CMP_GT_OQ);
-            la_vals0 = _mm256_blendv_ps(la_vals0, la_vals1, cmp01);
-            la_idxs0 = _mm256_blendv_epi8(la_idxs0, la_idxs1, _mm256_castps_si256(cmp01));
+            let m01_vals = _mm256_blendv_ps(la_vals0, la_vals1, cmp01);
+            let m01_idxs = _mm256_blendv_epi8(la_idxs0, la_idxs1, _mm256_castps_si256(cmp01));
 
-            let cmp02 = _mm256_cmp_ps(la_vals2, la_vals0, _CMP_GT_OQ);
-            la_vals0 = _mm256_blendv_ps(la_vals0, la_vals2, cmp02);
-            la_idxs0 = _mm256_blendv_epi8(la_idxs0, la_idxs2, _mm256_castps_si256(cmp02));
+            let cmp23 = _mm256_cmp_ps(la_vals3, la_vals2, _CMP_GT_OQ);
+            let m23_vals = _mm256_blendv_ps(la_vals2, la_vals3, cmp23);
+            let m23_idxs = _mm256_blendv_epi8(la_idxs2, la_idxs3, _mm256_castps_si256(cmp23));
 
-            let cmp03 = _mm256_cmp_ps(la_vals3, la_vals0, _CMP_GT_OQ);
-            la_vals0 = _mm256_blendv_ps(la_vals0, la_vals3, cmp03);
-            la_idxs0 = _mm256_blendv_epi8(la_idxs0, la_idxs3, _mm256_castps_si256(cmp03));
+            let cmp_final = _mm256_cmp_ps(m23_vals, m01_vals, _CMP_GT_OQ);
+            let mut la_vals = _mm256_blendv_ps(m01_vals, m23_vals, cmp_final);
+            let mut la_idxs =
+                _mm256_blendv_epi8(m01_idxs, m23_idxs, _mm256_castps_si256(cmp_final));
 
+            let mut rem_idx = _mm256_add_epi32(base_idx, _mm256_set1_epi32(i as i32));
+            let eight = _mm256_set1_epi32(8); // maintain 8-lane running index for the next loop
+
+            // Reminder loop for any remaining elements that didn't fit into the 32-element blocks
             while i + 8 <= n {
-                let x0 = _mm256_loadu_ps(x_ptr.add(i));
-                let abs0 = _mm256_and_ps(x0, mask);
-                let idx0 = _mm256_add_epi32(base_idx, _mm256_set1_epi32(i as i32));
+                let x = _mm256_loadu_ps(x_ptr.add(i));
+                let abs = _mm256_and_ps(x, mask);
 
-                let cmp0 = _mm256_cmp_ps(abs0, la_vals0, _CMP_GT_OQ);
-                la_vals0 = _mm256_blendv_ps(la_vals0, abs0, cmp0);
-                la_idxs0 = _mm256_blendv_epi8(la_idxs0, idx0, _mm256_castps_si256(cmp0));
+                let cmp = _mm256_cmp_ps(abs, la_vals, _CMP_GT_OQ);
+                la_vals = _mm256_blendv_ps(la_vals, abs, cmp);
+                la_idxs = _mm256_blendv_epi8(la_idxs, rem_idx, _mm256_castps_si256(cmp));
+
+                rem_idx = _mm256_add_epi32(rem_idx, eight);
 
                 i += 8;
             }
 
+            // TODO; these tmp alloc is fine, since it not inside any hot loop
+
             let mut tmp_vals = [0.0f32; 8];
             let mut tmp_idxs = [0i32; 8];
-            // Store the registers to temporary arrays for reduction
-            _mm256_storeu_ps(tmp_vals.as_mut_ptr(), la_vals0);
-            _mm256_storeu_si256(tmp_idxs.as_mut_ptr() as *mut __m256i, la_idxs0);
+            // Store the tree-reduced values to temporary arrays for final scalar reduction
+            _mm256_storeu_ps(tmp_vals.as_mut_ptr(), la_vals);
+            _mm256_storeu_si256(tmp_idxs.as_mut_ptr() as *mut __m256i, la_idxs);
 
-            let mut la_val = -1.0f32;
+            let mut la_val = -f32::INFINITY;
             let mut la_idx = 0usize;
 
             for j in 0..8 {
-                // Check if the current value is greater than the max found so far, or if it's a tie,
-                // check if the index is smaller (to ensure we return the first occurrence of the max value)
-                if tmp_vals.get_unchecked(j) > &la_val
-                    || (tmp_vals.get_unchecked(j) == &la_val
-                        && (*tmp_idxs.get_unchecked(j) as usize) < la_idx)
-                {
+                // _CMP_GT_OQ is strict (>) and ignores equality, so the SIMD registers
+                // inherently preserve the first occurrence (lowest index)
+                if tmp_vals.get_unchecked(j) > &la_val {
                     la_val = *tmp_vals.get_unchecked(j);
                     la_idx = *tmp_idxs.get_unchecked(j) as usize;
                 } // On tie, we ignore the new index since
@@ -1021,31 +1049,31 @@ pub(crate) unsafe fn i_amax_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
             }
 
             la_idx
-        }
-    } else {
-        let incx = incx as isize;
-        let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
-        let x_ptr = x.as_ptr();
-        let mut la_idx: usize = 0;
-        let mut la_val = -f32::INFINITY;
-        for _ in 0..n {
-            let val = unsafe { (*x_ptr.offset(ix)).abs() };
-            if val > la_val {
-                la_val = val;
-                la_idx = ix as usize;
+        } else {
+            let incx = incx as isize;
+            let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
+            let x_ptr = x.as_ptr();
+            let mut la_idx: usize = 0;
+            let mut la_val = -f32::INFINITY;
+            for i in 0..n {
+                let val = (*x_ptr.offset(ix)).abs();
+                if val > la_val {
+                    la_val = val;
+                    la_idx = i;
+                }
+                ix += incx;
             }
-            ix += incx;
+            la_idx
         }
-        la_idx
     }
 }
 
 #[inline(always)]
-/// The iamin routines return an index i such that x\[i\] has the minimum absolute value of all elements in vector x.
+/// The iamin routines return an index i such that 'x\[i\]' has the minimum absolute value of all elements in vector x. _(DOES NOT HANDLE NAN)_
 /// [ref](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/iamin.html) for more details
 pub fn i_amin(n: usize, x: &[f32], incx: i32) -> usize {
     if n == 0 {
-        return 0;
+        panic!("n must be greater than 0");
     }
 
     if incx == 0 {
@@ -1062,20 +1090,21 @@ pub fn i_amin(n: usize, x: &[f32], incx: i32) -> usize {
 #[inline(always)]
 #[allow(clippy::missing_safety_doc)]
 pub(crate) unsafe fn i_amin_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
-    if incx == 1 {
-        unsafe {
+    unsafe {
+        if incx == 1 {
             let x_ptr = x.as_ptr();
 
             // Create mask [0x7fffffff, 0x7fffffff, ...8 times]
             let mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff));
 
-            let base_idx = _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+            let base_idx = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
 
             // Init min trackers to +inf so any valid absolute value overwrites it,
-            let mut sm_vals0 = _mm256_set1_ps(f32::INFINITY);
-            let mut sm_vals1 = _mm256_set1_ps(f32::INFINITY);
-            let mut sm_vals2 = _mm256_set1_ps(f32::INFINITY);
-            let mut sm_vals3 = _mm256_set1_ps(f32::INFINITY);
+            let pos_inf_lane = _mm256_set1_ps(f32::INFINITY);
+            let mut sm_vals0 = pos_inf_lane;
+            let mut sm_vals1 = pos_inf_lane;
+            let mut sm_vals2 = pos_inf_lane;
+            let mut sm_vals3 = pos_inf_lane;
 
             let mut sm_idxs0 = _mm256_setzero_si256();
             let mut sm_idxs1 = _mm256_setzero_si256();
@@ -1132,53 +1161,58 @@ pub(crate) unsafe fn i_amin_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
                 idx2 = _mm256_add_epi32(idx2, thirty_two);
                 idx3 = _mm256_add_epi32(idx3, thirty_two);
 
-                _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_NTA);
+                // {
+                //     _mm_prefetch(x_ptr.add(i + 256) as *const i8, _MM_HINT_NTA);
+                // }
             }
 
+            // Tree reduction for merging acc
             let cmp01 = _mm256_cmp_ps(sm_vals1, sm_vals0, _CMP_LT_OQ);
-            sm_vals0 = _mm256_blendv_ps(sm_vals0, sm_vals1, cmp01);
-            sm_idxs0 = _mm256_blendv_epi8(sm_idxs0, sm_idxs1, _mm256_castps_si256(cmp01));
+            let m01_vals = _mm256_blendv_ps(sm_vals0, sm_vals1, cmp01);
+            let m01_idxs = _mm256_blendv_epi8(sm_idxs0, sm_idxs1, _mm256_castps_si256(cmp01));
 
-            let cmp02 = _mm256_cmp_ps(sm_vals2, sm_vals0, _CMP_LT_OQ);
-            sm_vals0 = _mm256_blendv_ps(sm_vals0, sm_vals2, cmp02);
-            sm_idxs0 = _mm256_blendv_epi8(sm_idxs0, sm_idxs2, _mm256_castps_si256(cmp02));
+            let cmp23 = _mm256_cmp_ps(sm_vals3, sm_vals2, _CMP_LT_OQ);
+            let m23_vals = _mm256_blendv_ps(sm_vals2, sm_vals3, cmp23);
+            let m23_idxs = _mm256_blendv_epi8(sm_idxs2, sm_idxs3, _mm256_castps_si256(cmp23));
 
-            let cmp03 = _mm256_cmp_ps(sm_vals3, sm_vals0, _CMP_LT_OQ);
-            sm_vals0 = _mm256_blendv_ps(sm_vals0, sm_vals3, cmp03);
-            sm_idxs0 = _mm256_blendv_epi8(sm_idxs0, sm_idxs3, _mm256_castps_si256(cmp03));
+            let cmp_final = _mm256_cmp_ps(m23_vals, m01_vals, _CMP_LT_OQ);
+            let mut sm_vals = _mm256_blendv_ps(m01_vals, m23_vals, cmp_final);
+            let mut sm_idxs =
+                _mm256_blendv_epi8(m01_idxs, m23_idxs, _mm256_castps_si256(cmp_final));
+
+            // Running index for the remaining elements, starting from the last processed index
+            let mut rem_idx = _mm256_add_epi32(base_idx, _mm256_set1_epi32(i as i32));
+            let eight = _mm256_set1_epi32(8);
 
             while i + 8 <= n {
-                let x0 = _mm256_loadu_ps(x_ptr.add(i));
-                let abs0 = _mm256_and_ps(x0, mask);
-                let idx0 = _mm256_add_epi32(base_idx, _mm256_set1_epi32(i as i32));
+                let x = _mm256_loadu_ps(x_ptr.add(i));
+                let abs = _mm256_and_ps(x, mask);
 
-                let cmp0 = _mm256_cmp_ps(abs0, sm_vals0, _CMP_LT_OQ);
-                sm_vals0 = _mm256_blendv_ps(sm_vals0, abs0, cmp0);
-                sm_idxs0 = _mm256_blendv_epi8(sm_idxs0, idx0, _mm256_castps_si256(cmp0));
+                let cmp = _mm256_cmp_ps(abs, sm_vals, _CMP_LT_OQ);
+                sm_vals = _mm256_blendv_ps(sm_vals, abs, cmp);
+                sm_idxs = _mm256_blendv_epi8(sm_idxs, rem_idx, _mm256_castps_si256(cmp));
+
+                rem_idx = _mm256_add_epi32(rem_idx, eight);
 
                 i += 8;
             }
 
             let mut tmp_vals = [0.0f32; 8];
             let mut tmp_idxs = [0i32; 8];
-            // Store the SIMD registers to temporary arrays for reduction
-            _mm256_storeu_ps(tmp_vals.as_mut_ptr(), sm_vals0);
-            _mm256_storeu_si256(tmp_idxs.as_mut_ptr() as *mut __m256i, sm_idxs0);
+            // Store the tree-reduced values to temporary arrays for final scalar reduction
+            _mm256_storeu_ps(tmp_vals.as_mut_ptr(), sm_vals);
+            _mm256_storeu_si256(tmp_idxs.as_mut_ptr() as *mut __m256i, sm_idxs);
 
             let mut sm_val = f32::INFINITY;
             let mut sm_idx = 0usize;
 
             for j in 0..8 {
-                // Check if the current value is greater than the max found so far, or if it's a tie,
-                // check if the index is smaller (to ensure we return the first occurrence of the max value)
-                if tmp_vals.get_unchecked(j) < &sm_val
-                    || (tmp_vals.get_unchecked(j) == &sm_val
-                        && (*tmp_idxs.get_unchecked(j) as usize) < sm_idx)
-                {
+                // Simplified tie-breaking (strict < keeps the first occurrence)
+                if tmp_vals.get_unchecked(j) < &sm_val {
                     sm_val = *tmp_vals.get_unchecked(j);
                     sm_idx = *tmp_idxs.get_unchecked(j) as usize;
                 } // On tie, we ignore the new index since
-                // we want the first occurrence (lower index) of the max value
+                // we want the first occurrence (lower index) of the min value
             }
 
             while i < n {
@@ -1191,22 +1225,22 @@ pub(crate) unsafe fn i_amin_unsafe(n: usize, x: &[f32], incx: i32) -> usize {
             }
 
             sm_idx
-        }
-    } else {
-        let incx = incx as isize;
-        let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
-        let x_ptr = x.as_ptr();
-        let mut sm_idx: usize = 0;
-        let mut sm_val = f32::INFINITY;
-        for _ in 0..n {
-            let val = unsafe { (*x_ptr.offset(ix)).abs() };
-            if val < sm_val {
-                sm_val = val;
-                sm_idx = ix as usize;
+        } else {
+            let incx = incx as isize;
+            let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
+            let x_ptr = x.as_ptr();
+            let mut sm_idx: usize = 0;
+            let mut sm_val = f32::INFINITY;
+            for i in 0..n {
+                let val = (*x_ptr.offset(ix)).abs();
+                if val < sm_val {
+                    sm_val = val;
+                    sm_idx = i;
+                }
+                ix += incx;
             }
-            ix += incx;
+            sm_idx
         }
-        sm_idx
     }
 }
 
@@ -1277,8 +1311,10 @@ pub fn rot(n: usize, x: &mut [f32], incx: i32, y: &mut [f32], incy: i32, c: f32,
                 _mm256_storeu_ps(y_ptr.add(i + 24), ry3);
                 i += 32;
 
-                _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_ET0);
-                _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_ET0);
+                // {
+                //     _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_ET0);
+                //     _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_ET0);
+                // }
             }
             while i + 8 <= n {
                 let x = _mm256_loadu_ps(x_ptr.add(i));

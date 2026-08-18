@@ -451,14 +451,14 @@ fn test_simd_reduce() {
     }
 }
 
-#[inline(always)]
 /// Transposes a matrix `src` of dimensions `rows x cols` into `dest` of dimensions `cols x rows` using a blocked approach for cache efficiency
+#[inline(always)]
 pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
     assert_eq!(src.len(), rows * cols);
     assert_eq!(dst.len(), rows * cols);
 
-    const TILE: usize = 64;
     const LANE: usize = 8;
+    const TILE: usize = 64;
 
     for ii in (0..rows).step_by(TILE) {
         for jj in (0..cols).step_by(TILE) {
@@ -493,7 +493,7 @@ pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
 }
 
 #[inline(always)]
-/// 8×8 in-register matrix transpose micro-kernel using `AVX2`. _MY HANDS ARE UP, I JUST COPY-PASTE FROM [Here](https://docs.rs/aprender-compute/0.63.0/src/trueno/blis/transpose.rs.html#50)_
+/// 8×8 in-register matrix transpose micro-kernel using `AVX2`, using classical interleaving and shuffling techniques.
 unsafe fn transpose_8x8_avx2(src: *const f32, src_stride: usize, dst: *mut f32, dst_stride: usize) {
     unsafe {
         // load 8 source rows

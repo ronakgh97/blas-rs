@@ -1,6 +1,6 @@
 //! # `blas-rs`
 //!
-//! Experimental BLAS kernels written in Rust for **`x86_64`**.
+//! Experimental F32 BLAS kernels written in Rust for **`x86_64`**.
 //!
 //! This crate currently focuses on ALL Level [BLAS](https://www.netlib.org/blas/blas.pdf) kernels for `f32` only,
 //! with SIMD-heavy implementations (`AVX2 only, so having AVX-512 CPU won't benefit`) where applicable.

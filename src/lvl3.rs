@@ -1,14 +1,13 @@
 //! Implementation of Level 3 BLAS routines
 use crate::lvl1::scal;
-use crate::utils::reduce_add;
+use crate::reduce_add;
 #[allow(unused)]
 use std::arch::x86_64::{
     _MM_HINT_T0, _MM_HINT_T1, _mm_prefetch, _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps,
     _mm256_mul_ps, _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps,
 };
 use std::slice::from_raw_parts_mut;
-
-// TODO; too slow, i know there is rooms for perf!!!, and i have no idea what i am doing, REALLY
+// TODO; Too slow!!!, I know there is rooms for perf!!!, and I am doing something terribly wrong here
 
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
@@ -790,25 +789,25 @@ pub fn gemm(
                         }
 
                         // reduce scalar
-                        let mut dot00 = reduce_add(sum00);
-                        let mut dot01 = reduce_add(sum01);
-                        let mut dot02 = reduce_add(sum02);
-                        let mut dot03 = reduce_add(sum03);
+                        let mut dot00 = reduce_add!(sum00);
+                        let mut dot01 = reduce_add!(sum01);
+                        let mut dot02 = reduce_add!(sum02);
+                        let mut dot03 = reduce_add!(sum03);
 
-                        let mut dot10 = reduce_add(sum10);
-                        let mut dot11 = reduce_add(sum11);
-                        let mut dot12 = reduce_add(sum12);
-                        let mut dot13 = reduce_add(sum13);
+                        let mut dot10 = reduce_add!(sum10);
+                        let mut dot11 = reduce_add!(sum11);
+                        let mut dot12 = reduce_add!(sum12);
+                        let mut dot13 = reduce_add!(sum13);
 
-                        let mut dot20 = reduce_add(sum20);
-                        let mut dot21 = reduce_add(sum21);
-                        let mut dot22 = reduce_add(sum22);
-                        let mut dot23 = reduce_add(sum23);
+                        let mut dot20 = reduce_add!(sum20);
+                        let mut dot21 = reduce_add!(sum21);
+                        let mut dot22 = reduce_add!(sum22);
+                        let mut dot23 = reduce_add!(sum23);
 
-                        let mut dot30 = reduce_add(sum30);
-                        let mut dot31 = reduce_add(sum31);
-                        let mut dot32 = reduce_add(sum32);
-                        let mut dot33 = reduce_add(sum33);
+                        let mut dot30 = reduce_add!(sum30);
+                        let mut dot31 = reduce_add!(sum31);
+                        let mut dot32 = reduce_add!(sum32);
+                        let mut dot33 = reduce_add!(sum33);
 
                         // scalar fallback for remaining K
                         while p < k {
@@ -887,10 +886,10 @@ pub fn gemm(
                             p += 8;
                         }
 
-                        let mut dot0 = reduce_add(sum0);
-                        let mut dot1 = reduce_add(sum1);
-                        let mut dot2 = reduce_add(sum2);
-                        let mut dot3 = reduce_add(sum3);
+                        let mut dot0 = reduce_add!(sum0);
+                        let mut dot1 = reduce_add!(sum1);
+                        let mut dot2 = reduce_add!(sum2);
+                        let mut dot3 = reduce_add!(sum3);
 
                         while p < k {
                             let a_val = *a_ptr_i.add(p);
@@ -938,10 +937,10 @@ pub fn gemm(
                             p += 8;
                         }
 
-                        let mut dot0 = reduce_add(sum0);
-                        let mut dot1 = reduce_add(sum1);
-                        let mut dot2 = reduce_add(sum2);
-                        let mut dot3 = reduce_add(sum3);
+                        let mut dot0 = reduce_add!(sum0);
+                        let mut dot1 = reduce_add!(sum1);
+                        let mut dot2 = reduce_add!(sum2);
+                        let mut dot3 = reduce_add!(sum3);
 
                         while p < k {
                             let b_val = *b0_ptr.add(p);
@@ -972,7 +971,7 @@ pub fn gemm(
                             );
                             p += 8;
                         }
-                        let mut dot0 = reduce_add(sum0);
+                        let mut dot0 = reduce_add!(sum0);
                         while p < k {
                             dot0 = (*a_ptr_i.add(p)).mul_add(*b0_ptr.add(p), dot0);
                             p += 1;
@@ -999,7 +998,7 @@ fn gemm_test() {
 
     println!("size: {}", size);
 
-    let mut noise = Noise::init();
+    let mut noise = Noise::rng();
     let mut a = vec![0.0f32; size * size];
     let mut b = vec![0.0f32; size * size];
     let mut c = vec![0.0f32; size * size];
