@@ -1,9 +1,9 @@
 [package]
 name = "blas-rs"
-version = "1.0.0-alpha.9"
+version = "1.0.0-alpha.10"
 edition = "2024"
 authors = ["ronakgh {ronakgh97@gmail.com}"]
-description = "Experimental F32 BLAS & Intel Math kernels library for x86_64 cpu"
+description = "Experimental F32 BLAS & Intel Math kernels library for x86_64 cpus"
 license = "MIT"
 repository = "https://github.com/ronakgh97/blas-rs"
 readme = "README.md"
@@ -15,13 +15,13 @@ name = "blas_rs"
 path = "src/lib.rs"
 
 [[bench]]
-name = "bencher"
-path = "bench/bencher.rs"
+name = "main"
+path = "bench/main.rs"
 harness = false
 
 [[bench]]
-name = "vtune"
-path = "bench/vtune.rs"
+name = "lite"
+path = "bench/lite.rs"
 harness = false
 
 [profile.bench]
@@ -38,7 +38,7 @@ debug = true
 
 [dependencies]
 rand = "0.10.1"
-rand_xoshiro = "0.8.1" # apparently faster than my impl of splitmix64 :(
+# rand_xoshiro = "0.8.1" # apparently my impl of xoshiro is better suited :)
 # rayon = "1.12.0" # for cpu parallel computations
 # cudarc = { version = "0.19.8", features = ["cuda-13030"] } # cuda or wgpu? :/
 
@@ -48,6 +48,7 @@ blas = "0.23.0" # for BLAS bindings, used in the reference implementation and be
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
 core_affinity = "0.8.3"
 # ittapi = "0.5.0" intel accurate tracing api
+colored = "3.1.1"
 
 # safetensors = "0.8.0"
 # image = "0.25.10"
