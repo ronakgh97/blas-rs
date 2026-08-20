@@ -62,6 +62,12 @@ fn warmup(noise: &mut Noise, r: usize, s: usize) {
 
             dot(s, &y, 1, &vec![0.0f32; s], 1);
 
+            asum(s, &y, 1);
+
+            nrm2(s, &y, 1);
+
+            i_amax(s, &y, 1);
+
             gemv(
                 s,
                 s,
@@ -115,6 +121,12 @@ fn warmup(noise: &mut Noise, r: usize, s: usize) {
             axpy_intel_mkl(s as i32, (i % 7) as f32, &y, 1, &mut vec![0.0f32; s], 1);
 
             dot_intel_mkl(s as i32, &y, 1, &vec![0.0f32; s], 1);
+
+            asum_intel_mkl(s as i32, &y, 1);
+
+            nrm2_intel_mkl(s as i32, &y, 1);
+
+            i_amax_intel_mkl(s as i32, &y, 1);
 
             gemv_intel_mkl(
                 s as i32,
@@ -298,7 +310,7 @@ fn bench_axpy(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_p
             ((i as f64).log10(), gflops),
             ((i as f64).log10(), latency.log10()),
             ((i as f64).log10(), cache_eff),
-            (i as f64, cyc_per_flop),
+            ((i as f64).log10(), cyc_per_flop),
             ((i as f64).log10(), gflops_rel),
             ((i as f64).log10(), latency_rel),
         );
@@ -386,7 +398,7 @@ fn bench_nrm2(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_p
             ((i as f64).log10(), gflops),
             ((i as f64).log10(), latency.log10()),
             ((i as f64).log10(), cache_eff),
-            (i as f64, cyc_per_flop),
+            ((i as f64).log10(), cyc_per_flop),
             ((i as f64).log10(), gflops_rel),
             ((i as f64).log10(), 0.0),
         );
@@ -471,7 +483,7 @@ fn bench_asum(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_p
             ((i as f64).log10(), gflops),
             ((i as f64).log10(), latency.log10()),
             ((i as f64).log10(), cache_eff),
-            (i as f64, cyc_per_flop),
+            ((i as f64).log10(), cyc_per_flop),
             ((i as f64).log10(), gflops_rel),
             ((i as f64).log10(), 0.0),
         );
@@ -560,7 +572,7 @@ fn bench_dot(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_pa
             ((i as f64).log10(), gflops),
             ((i as f64).log10(), latency.log10()),
             ((i as f64).log10(), cache_eff),
-            (i as f64, cyc_per_flop),
+            ((i as f64).log10(), cyc_per_flop),
             ((i as f64).log10(), gflops_rel),
             ((i as f64).log10(), latency_rel),
         );
@@ -648,7 +660,7 @@ fn bench_i_amax(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot
             ((i as f64).log10(), gflops),
             ((i as f64).log10(), latency.log10()),
             ((i as f64).log10(), cache_eff),
-            (i as f64, cyc_per_flop),
+            ((i as f64).log10(), cyc_per_flop),
             ((i as f64).log10(), gflops_rel),
             ((i as f64).log10(), 0.0),
         );
@@ -764,7 +776,7 @@ fn bench_gemv(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_p
             ((i as f64).log10(), gflops),
             ((i as f64).log10(), latency.log10()),
             ((i as f64).log10(), cache_eff),
-            (i as f64, cyc_per_flop),
+            ((i as f64).log10(), cyc_per_flop),
             ((i as f64).log10(), gflops_rel),
             ((i as f64).log10(), latency_rel),
         );
@@ -883,7 +895,7 @@ fn bench_gemv_t(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot
             ((i as f64).log10(), gflops),
             ((i as f64).log10(), latency.log10()),
             ((i as f64).log10(), cache_eff),
-            (i as f64, cyc_per_flop),
+            ((i as f64).log10(), cyc_per_flop),
             ((i as f64).log10(), gflops_rel),
             ((i as f64).log10(), latency_rel),
         );
@@ -1007,7 +1019,7 @@ fn bench_gemm_f_f(noise: &mut Noise, size_sample: &[usize], target_time: f64, pl
             ((i as f64).log10(), gflops),
             ((i as f64).log10(), latency.log10()),
             ((i as f64).log10(), cache_eff),
-            (i as f64, cyc_per_flop),
+            ((i as f64).log10(), cyc_per_flop),
             ((i as f64).log10(), gflops_rel),
             ((i as f64).log10(), latency_rel),
         );

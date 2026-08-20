@@ -256,6 +256,7 @@ fn main() {
 
     let total_flops = flops_per_call * runs as f64;
     let gflops = total_flops / elapsed / 1e9;
+    let archmetic_intensity = total_flops / (size * size) as f64;
     let cycles = (clock_end_mark - clock_start_mark) as f64;
 
     println!("---");
@@ -263,7 +264,8 @@ fn main() {
     println!("size:     {}", size);
     println!("runs:     {}", runs);
     println!("elapsed:  {:.3}s", elapsed);
-    println!("flops/c:  {:.3}", flops_per_call);
     println!("gflops:   {:.3}", gflops);
+    println!("ai:       {:.3}", archmetic_intensity);
+    println!("flops/c:  {:.3}", flops_per_call);
     println!("cycles/f: {:.3}", cycles / total_flops);
 }
