@@ -194,8 +194,7 @@ pub fn gemv(
                         y3 = _mm256_fmadd_ps(ax5, c63, y3);
 
                         // write back once per 6 col
-                        // TODO; store/compute/load all iteration is SLOW HEAVY!!!,
-                        //  we can load 6 col and just pray for cpu
+                        // TODO; store/compute/load all iteration is SLOW HEAVY!!!, we could load 6 col and just pray for cpu
                         _mm256_storeu_ps(y_ptr.add(i), y0);
                         _mm256_storeu_ps(y_ptr.add(i + 8), y1);
                         _mm256_storeu_ps(y_ptr.add(i + 16), y2);
@@ -603,7 +602,7 @@ pub fn gemv(
 
                     // any remaining
                     while i < m {
-                        dot_val += *col.add(i) * *x_ptr.add(i);
+                        dot_val = (*col.add(i)).mul_add(*x_ptr.add(i), dot_val);
                         i += 1;
                     }
 

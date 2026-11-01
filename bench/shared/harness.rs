@@ -1,5 +1,5 @@
 use crate::BenchMetrics;
-use crate::utils::MAX_L1L2_KB;
+use crate::shared::utils::MAX_L1L2_KB;
 use std::arch::x86_64::{__rdtscp, _mm_lfence, _rdtsc};
 use std::time::Instant;
 

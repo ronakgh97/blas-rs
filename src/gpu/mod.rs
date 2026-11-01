@@ -1,1 +1,1 @@
-//! Cross-GPU module here
+//! Cross-GPU support using WGPU

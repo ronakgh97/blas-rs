@@ -8,7 +8,7 @@ use std::arch::x86_64::{
     _mm256_storeu_si256, _mm256_unpackhi_ps, _mm256_unpacklo_ps, _mm256_xor_si256,
 };
 
-/// A simple random noise generator using [`xorshiro256PlusPlus`](https://prng.di.unimi.it/xoshiro256plusplus.c) algorithm with AVX2 support.
+/// A simple random noise generator, implements [`xorshiro256PlusPlus`](https://prng.di.unimi.it/xoshiro256plusplus.c) algorithm with AVX2 support.
 #[derive(Clone)]
 pub struct Noise {
     s0: __m256i,
@@ -161,8 +161,8 @@ impl Noise {
     pub fn fill_f32(&mut self, buf: &mut [f32]) {
         // fill the buffer in chunks of 32 floats (8 * 4 floats)
         let scale = unsafe { _mm256_set1_ps(1.0 / (1u64 << 31) as f32) };
-        let mut chunks_32 = buf.chunks_exact_mut(32);
-        for chunk in chunks_32.by_ref() {
+        let (chunks_32, reminder_chunk_32) = buf.as_chunks_mut::<32>();
+        for chunk in chunks_32 {
             unsafe {
                 let l0 = self.next_state();
                 let l1 = self.next_state();
@@ -194,8 +194,8 @@ impl Noise {
         }
 
         // fill the remaining buffer in chunks of 8 floats (2 * 4 floats)
-        let mut chunk_8 = chunks_32.into_remainder().chunks_exact_mut(8);
-        for chunk in chunk_8.by_ref() {
+        let (chunk_8, reminder_chunk_8) = reminder_chunk_32.as_chunks_mut::<8>();
+        for chunk in chunk_8 {
             unsafe {
                 let l0 = self.next_state();
                 let l0_f32 = _mm256_cvtepi32_ps(l0);
@@ -205,7 +205,7 @@ impl Noise {
         }
 
         // fill any remaining floats (less than 8) using a single u64
-        let rem = chunk_8.into_remainder();
+        let rem = reminder_chunk_8;
         if !rem.is_empty() {
             let scale_scalar = 1.0 / (1u64 << 31) as f32;
             let (r0, r1, r2, r3) = self.next_u64s();
@@ -235,8 +235,8 @@ impl Noise {
     #[inline(always)]
     pub fn fill_bytes(&mut self, buf: &mut [u8]) {
         // fill the buffer in chunks of 128 bytes (4 * 32 bytes)
-        let mut chunks_128 = buf.chunks_exact_mut(128);
-        for chunk in chunks_128.by_ref() {
+        let (chunks_128, reminder_128) = buf.as_chunks_mut::<128>();
+        for chunk in chunks_128 {
             unsafe {
                 let l0 = self.next_state();
                 let l1 = self.next_state();
@@ -251,8 +251,8 @@ impl Noise {
         }
 
         // fill the remaining bytes in chunks of 32 bytes
-        let mut chunks_32 = chunks_128.into_remainder().chunks_exact_mut(32);
-        for chunk in chunks_32.by_ref() {
+        let (chunks_32, reminder_chunk_32) = reminder_128.as_chunks_mut::<32>();
+        for chunk in chunks_32 {
             unsafe {
                 let l0 = self.next_state();
                 _mm256_storeu_si256(chunk.as_mut_ptr() as *mut __m256i, l0);
@@ -260,7 +260,7 @@ impl Noise {
         }
 
         // fill any remaining bytes (less than 32) using exactly one u64
-        let rem = chunks_32.into_remainder();
+        let rem = reminder_chunk_32;
         if !rem.is_empty() {
             let (r, _, _, _) = self.next_u64s();
             let bytes: [u8; 8] = r.to_ne_bytes();
@@ -300,10 +300,11 @@ fn test_f32_fill() {
 macro_rules! reduce_add {
     ($v:expr) => {{
         use core::arch::x86_64::*;
+        let v: __m256 = $v;
         // first pass; [a,b,c,d | e,f,g,h]
-        let hi = _mm256_extractf128_ps($v, 1); // [e,f,g,h]
-        let lo = _mm256_castps256_ps128($v); // [a,b,c,d]
-        let hsum = _mm_add_ps(lo, hi); // [a+b, c+d, e+f, g+h]
+        let hi = _mm256_extractf128_ps(v, 1); // [e,f,g,h]
+        let lo = _mm256_castps256_ps128(v); // [a,b,c,d]
+        let hsum = _mm_add_ps(lo, hi); // [a+e, b+f, c+g, d+h]
 
         // second pass; add the two halves together
         let sum = _mm_hadd_ps(hsum, hsum); // [a+e+b+f c+g+d+h a+e+b+f c+g+d+h]
@@ -317,9 +318,10 @@ macro_rules! reduce_add {
 macro_rules! reduce_sub {
     ($v:expr) => {{
         use core::arch::x86_64::*;
+        let v: __m256 = $v;
         // first pass; [a,b,c,d | e,f,g,h]
-        let hi = _mm256_extractf128_ps($v, 1); // [e,f,g,h]
-        let lo = _mm256_castsi256_ps($v); // [a,b,c,d]
+        let hi = _mm256_extractf128_ps(v, 1); // [e,f,g,h]
+        let lo = _mm256_castsi256_ps(v); // [a,b,c,d]
         let hsum = _mm256_sub_ps(lo, hi); // [a-b, c-d, e-f, g-h]
 
         // second pass; add the two halves together
@@ -334,8 +336,9 @@ macro_rules! reduce_sub {
 macro_rules! reduce_min {
     ($v:expr) => {{
         use core::arch::x86_64::*;
-        let hi = _mm256_extractf128_ps($v, 1); // upper 128 bit
-        let lo = _mm256_castps256_ps128($v); // lower 128 bit
+        let v: __m256 = $v;
+        let hi = _mm256_extractf128_ps(v, 1); // upper 128 bit
+        let lo = _mm256_castps256_ps128(v); // lower 128 bit
         let m = _mm_min_ps(lo, hi); // min of lower/upper, 256 -> 128 bit
 
         let shuffle = _mm_shuffle_ps(m, m, 0b01_00_11_10); // [a,b,c,d] -> [c,d,a,b]
@@ -352,8 +355,9 @@ macro_rules! reduce_min {
 macro_rules! reduce_max {
     ($v:expr) => {{
         use core::arch::x86_64::*;
-        let hi = _mm256_extractf128_ps($v, 1); // upper 128 bit
-        let lo = _mm256_castps256_ps128($v); // lower 128 bit
+        let v: __m256 = $v;
+        let hi = _mm256_extractf128_ps(v, 1); // upper 128 bit
+        let lo = _mm256_castps256_ps128(v); // lower 128 bit
         let m = _mm_max_ps(lo, hi); // max of lower/upper, 256 -> 128 bit
 
         let shuffle = _mm_shuffle_ps(m, m, 0b01_00_11_10); // [a,b,c,d] -> [c,d,a,b]
@@ -493,7 +497,7 @@ pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
 }
 
 #[inline(always)]
-/// 8×8 in-register matrix transpose micro-kernel using `AVX2`, using classical interleaving and shuffling techniques.
+/// 8×8 in-register matrix transpose micro-kernel using `AVX2`, using classic interleaving and shuffling techniques.
 unsafe fn transpose_8x8_avx2(src: *const f32, src_stride: usize, dst: *mut f32, dst_stride: usize) {
     unsafe {
         // load 8 source rows

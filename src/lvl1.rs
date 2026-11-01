@@ -59,39 +59,50 @@ pub(crate) unsafe fn axpy_unsafe(
         if incx == 1 && incy == 1 {
             let mut i = 0;
 
-            // Handle 4 AVX registers at a time
             let alpha_x8 = _mm256_set1_ps(alpha);
-            while i + 32 <= n {
-                // Load from x
-                let x0 = _mm256_loadu_ps(x_ptr.add(i));
-                let x1 = _mm256_loadu_ps(x_ptr.add(i + 8));
-                let x2 = _mm256_loadu_ps(x_ptr.add(i + 16));
-                let x3 = _mm256_loadu_ps(x_ptr.add(i + 24));
 
-                // Load from y
-                let y0 = _mm256_loadu_ps(y_ptr.add(i));
-                let y1 = _mm256_loadu_ps(y_ptr.add(i + 8));
-                let y2 = _mm256_loadu_ps(y_ptr.add(i + 16));
-                let y3 = _mm256_loadu_ps(y_ptr.add(i + 24));
+            // compute 4 AVX registers at a time
+            // load from x, y, load again, do FMA of last and to store to y, lastly store to y
+            // like this:
+            // iter 0: LLL..FF.SS
+            // iter 1:   LLL..FF.SS
+            // iter 2:     LLL..FF.SS
+            // this allows some level of ILP, keeping the CPU-chan busy
+            if n >= 16 {
+                let mut x0 = _mm256_loadu_ps(x_ptr.add(i));
+                let mut x1 = _mm256_loadu_ps(x_ptr.add(i + 8));
+                let mut y0 = _mm256_loadu_ps(y_ptr.add(i));
+                let mut y1 = _mm256_loadu_ps(y_ptr.add(i + 8));
 
-                // FMA, Y += alpha * X
-                let r0 = _mm256_fmadd_ps(alpha_x8, x0, y0);
-                let r1 = _mm256_fmadd_ps(alpha_x8, x1, y1);
-                let r2 = _mm256_fmadd_ps(alpha_x8, x2, y2);
-                let r3 = _mm256_fmadd_ps(alpha_x8, x3, y3);
+                while i + 32 <= n {
+                    // load next 16 elements from x and y
+                    let nx0 = _mm256_loadu_ps(x_ptr.add(i + 16));
+                    let nx1 = _mm256_loadu_ps(x_ptr.add(i + 24));
 
-                // Store results back to y
-                _mm256_storeu_ps(y_ptr.add(i), r0);
-                _mm256_storeu_ps(y_ptr.add(i + 8), r1);
-                _mm256_storeu_ps(y_ptr.add(i + 16), r2);
-                _mm256_storeu_ps(y_ptr.add(i + 24), r3);
+                    let ny0 = _mm256_loadu_ps(y_ptr.add(i + 16));
+                    let ny1 = _mm256_loadu_ps(y_ptr.add(i + 24));
 
-                i += 32;
+                    // compute and store prev block to y
+                    _mm256_storeu_ps(y_ptr.add(i), _mm256_fmadd_ps(alpha_x8, x0, y0));
+                    _mm256_storeu_ps(y_ptr.add(i + 8), _mm256_fmadd_ps(alpha_x8, x1, y1));
 
-                // {
-                //     _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
-                //     _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
-                // }
+                    // update x0, x1, y0, y1 to next block
+                    x0 = nx0;
+                    x1 = nx1;
+                    y0 = ny0;
+                    y1 = ny1;
+                    i += 16;
+
+                    // {
+                    //     _mm_prefetch(x_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
+                    //     _mm_prefetch(y_ptr.add(i + 128) as *const i8, _MM_HINT_NTA);
+                    // }
+                }
+
+                // store the last preloaded block of 16 elements
+                _mm256_storeu_ps(y_ptr.add(i), _mm256_fmadd_ps(alpha_x8, x0, y0));
+                _mm256_storeu_ps(y_ptr.add(i + 8), _mm256_fmadd_ps(alpha_x8, x1, y1));
+                i += 16;
             }
 
             // Handle one AVX register at a time.
@@ -194,6 +205,10 @@ pub fn scal(n: usize, alpha: f32, x: &mut [f32], incx: i32) {
 pub(crate) unsafe fn scal_unsafe(n: usize, alpha: f32, x: &mut [f32], incx: i32) {
     let x_ptr = x.as_mut_ptr();
 
+    if n == 0 || alpha == 1.0 {
+        return;
+    }
+
     unsafe {
         if incx == 1 {
             if alpha == 0.0 {
@@ -201,63 +216,31 @@ pub(crate) unsafe fn scal_unsafe(n: usize, alpha: f32, x: &mut [f32], incx: i32)
                 return;
             }
 
-            let alpha_x8 = _mm256_set1_ps(alpha);
             let mut i = 0;
+            let alpha_x8 = _mm256_set1_ps(alpha);
+            while i + 32 <= n {
+                let mut v0 = _mm256_loadu_ps(x_ptr.add(i));
+                let mut v1 = _mm256_loadu_ps(x_ptr.add(i + 8));
+                let mut v2 = _mm256_loadu_ps(x_ptr.add(i + 16));
+                let mut v3 = _mm256_loadu_ps(x_ptr.add(i + 24));
 
-            // For large n, use non-temporal stores to avoid
-            // polluting cache with data that won't be reused soon.
-            // `_mm256_stream_ps` requires 32-byte alignment.
-            let is_aligned = (x_ptr as usize).is_multiple_of(32);
-            if is_aligned {
-                while i + 32 <= n {
-                    let v0 = _mm256_mul_ps(alpha_x8, _mm256_loadu_ps(x_ptr.add(i)));
-                    let v1 = _mm256_mul_ps(alpha_x8, _mm256_loadu_ps(x_ptr.add(i + 8)));
-                    let v2 = _mm256_mul_ps(alpha_x8, _mm256_loadu_ps(x_ptr.add(i + 16)));
-                    let v3 = _mm256_mul_ps(alpha_x8, _mm256_loadu_ps(x_ptr.add(i + 24)));
+                v0 = _mm256_mul_ps(alpha_x8, v0);
+                v1 = _mm256_mul_ps(alpha_x8, v1);
+                v2 = _mm256_mul_ps(alpha_x8, v2);
+                v3 = _mm256_mul_ps(alpha_x8, v3);
 
-                    _mm256_stream_ps(x_ptr.add(i), v0);
-                    _mm256_stream_ps(x_ptr.add(i + 8), v1);
-                    _mm256_stream_ps(x_ptr.add(i + 16), v2);
-                    _mm256_stream_ps(x_ptr.add(i + 24), v3);
+                _mm256_storeu_ps(x_ptr.add(i), v0);
+                _mm256_storeu_ps(x_ptr.add(i + 8), v1);
+                _mm256_storeu_ps(x_ptr.add(i + 16), v2);
+                _mm256_storeu_ps(x_ptr.add(i + 24), v3);
+                i += 32;
+            }
 
-                    i += 32;
-                }
-
-                while i + 8 <= n {
-                    let v = _mm256_mul_ps(alpha_x8, _mm256_loadu_ps(x_ptr.add(i)));
-                    _mm256_stream_ps(x_ptr.add(i), v);
-                    i += 8;
-                }
-            } else {
-                // unaligned case, use regular loadu, storeu, 32 elements at time
-                while i + 32 <= n {
-                    let mut v0 = _mm256_loadu_ps(x_ptr.add(i));
-                    let mut v1 = _mm256_loadu_ps(x_ptr.add(i + 8));
-                    let mut v2 = _mm256_loadu_ps(x_ptr.add(i + 16));
-                    let mut v3 = _mm256_loadu_ps(x_ptr.add(i + 24));
-
-                    v0 = _mm256_mul_ps(alpha_x8, v0);
-                    v1 = _mm256_mul_ps(alpha_x8, v1);
-                    v2 = _mm256_mul_ps(alpha_x8, v2);
-                    v3 = _mm256_mul_ps(alpha_x8, v3);
-
-                    _mm256_storeu_ps(x_ptr.add(i), v0);
-                    _mm256_storeu_ps(x_ptr.add(i + 8), v1);
-                    _mm256_storeu_ps(x_ptr.add(i + 16), v2);
-                    _mm256_storeu_ps(x_ptr.add(i + 24), v3);
-
-                    // next 32 elements
-                    i += 32;
-
-                    _mm_prefetch(x_ptr.add(i + 32) as *const i8, _MM_HINT_NTA);
-                }
-
-                while i + 8 <= n {
-                    let v = _mm256_loadu_ps(x_ptr.add(i));
-                    let res = _mm256_mul_ps(alpha_x8, v);
-                    _mm256_storeu_ps(x_ptr.add(i), res);
-                    i += 8;
-                }
+            while i + 8 <= n {
+                let v = _mm256_loadu_ps(x_ptr.add(i));
+                let res = _mm256_mul_ps(alpha_x8, v);
+                _mm256_storeu_ps(x_ptr.add(i), res);
+                i += 8;
             }
 
             // handle leftovers
@@ -270,6 +253,15 @@ pub(crate) unsafe fn scal_unsafe(n: usize, alpha: f32, x: &mut [f32], incx: i32)
             let incx = incx as isize;
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
 
+            // assign, don't multiply, so NaN/inf in x becomes 0
+            if alpha == 0.0 {
+                for _ in 0..n {
+                    *x_ptr.offset(ix) = 0.0;
+                    ix += incx;
+                }
+                return;
+            }
+
             let mut i = 0;
             while i + 4 <= n {
                 *x_ptr.offset(ix) *= alpha;
@@ -280,7 +272,7 @@ pub(crate) unsafe fn scal_unsafe(n: usize, alpha: f32, x: &mut [f32], incx: i32)
                 i += 4;
             }
 
-            // fallback
+            // handle leftovers
             while i < n {
                 *x_ptr.offset(ix) *= alpha;
                 ix += incx;
@@ -291,7 +283,7 @@ pub(crate) unsafe fn scal_unsafe(n: usize, alpha: f32, x: &mut [f32], incx: i32)
 }
 
 #[inline(always)]
-/// The copy routines copy one vector to another.
+// Copies a vector to another vector.
 /// [ref](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/copy.html) for more details
 pub fn copy(n: usize, x: &[f32], incx: i32, y: &mut [f32], incy: i32) {
     if n == 0 {
@@ -494,7 +486,7 @@ pub(crate) unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy:
             let mut sum3 = _mm256_setzero_ps();
             let mut i = 0;
 
-            // Load 32 elements (4 AVX registers) at a time
+            // load 32 elements (4 AVX registers) at a time
             // compute partial dot products in 'parallel' (ILP)
             while i + 32 <= n {
                 let x0 = _mm256_loadu_ps(x_ptr.add(i));
@@ -507,7 +499,7 @@ pub(crate) unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy:
                 let y2 = _mm256_loadu_ps(y_ptr.add(i + 16));
                 let y3 = _mm256_loadu_ps(y_ptr.add(i + 24));
 
-                // 4 accumulators to allow for some instruction-level parallelism,
+                // four accumulators to allow for some instruction-level parallelism,
                 // we will sum them up at the end
                 sum0 = _mm256_fmadd_ps(x0, y0, sum0);
                 sum1 = _mm256_fmadd_ps(x1, y1, sum1);
@@ -529,7 +521,7 @@ pub(crate) unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy:
                 i += 8;
             }
 
-            // add & reduce
+            // add & reduce to scalar
             let sum = _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3));
             let mut result = reduce_add!(sum);
 
@@ -547,12 +539,8 @@ pub(crate) unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy:
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
             let mut iy = if incy < 0 { (1 - n as isize) * incy } else { 0 };
 
-            let mut sum0 = 0.0f32;
-            let mut sum1 = 0.0f32;
-            let mut sum2 = 0.0f32;
-            let mut sum3 = 0.0f32;
-
-            // Have four accumulators to allow for some level of parallelism
+            // have four accumulators to allow for some level of parallelism
+            let (mut sum0, mut sum1, mut sum2, mut sum3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
             let mut i = 0;
             while i + 4 <= n {
                 let x_val = *x_ptr.offset(ix);
@@ -582,7 +570,7 @@ pub(crate) unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy:
                 i += 4;
             }
 
-            // Handle remaining elements
+            // handle remaining elements
             while i < n {
                 let x_val = *x_ptr.offset(ix);
                 let y_val = *y_ptr.offset(iy);
@@ -590,10 +578,10 @@ pub(crate) unsafe fn dot_unsafe(n: usize, x: &[f32], incx: i32, y: &[f32], incy:
                 ix += incx;
                 iy += incy;
 
-                i += 4;
+                i += 1;
             }
 
-            (sum0 + sum1) + (sum2 + sum3)
+            (sum0.algebraic_add(sum1)) + (sum2.algebraic_add(sum3))
         }
     }
 }
@@ -665,14 +653,19 @@ pub(crate) unsafe fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
 
             // reduce max
             let mut scale = reduce_max!(combined);
+
             // handle remaining elements (when n % 8 != 0 and n < 32)
             while i < n {
                 scale = scale.max((*x_ptr.add(i)).abs());
                 i += 1;
             }
 
-            if scale == 0.0 && scale == f32::INFINITY {
+            if scale == 0.0 {
                 return 0.0;
+            }
+            if !scale.is_finite() {
+                // inf stays inf, NaN stays NaN
+                return scale;
             }
 
             // compute sum of (x[i]/scale)^2
@@ -681,7 +674,7 @@ pub(crate) unsafe fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
             let mut sum1 = _mm256_setzero_ps();
             let mut sum2 = _mm256_setzero_ps();
             let mut sum3 = _mm256_setzero_ps();
-            let inv_scale = _mm256_set1_ps(1.0 / scale); // inv, mul > div?
+            let inv_scale = _mm256_set1_ps(1.0 / scale); // inv, mul > div? may lose precision, or cause Inf
 
             while i + 32 <= n {
                 // Load & 'scale' 4 AVX reg at time
@@ -709,19 +702,17 @@ pub(crate) unsafe fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
                 sum = _mm256_fmadd_ps(x, x, sum);
                 i += 8;
             }
-
-            let mut result = reduce_add!(sum);
-
             let inv_scale = 1.0 / scale;
 
             // handle remaining
+            let mut reduced_sum = reduce_add!(sum);
             while i < n {
                 let xi = *x_ptr.add(i) * inv_scale;
-                result = xi.mul_add(xi, result);
+                reduced_sum = xi.mul_add(xi, reduced_sum);
                 i += 1;
             }
 
-            scale * result.sqrt()
+            scale.algebraic_mul(reduced_sum.sqrt())
         } else {
             let incx = incx as isize;
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
@@ -738,6 +729,9 @@ pub(crate) unsafe fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
 
             if scale == 0.0 {
                 return 0.0;
+            }
+            if !scale.is_finite() {
+                return scale;
             }
 
             // compute sum of (x[i]/scale)^2
@@ -767,7 +761,7 @@ pub(crate) unsafe fn nrm2_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
                 i += 1;
             }
 
-            scale * sum.sqrt()
+            scale.algebraic_mul(sum.sqrt())
         }
     }
 }
@@ -852,29 +846,23 @@ pub(crate) unsafe fn asum_unsafe(n: usize, x: &[f32], incx: i32) -> f32 {
             let incx = incx as isize;
             let mut ix = if incx < 0 { (1 - n as isize) * incx } else { 0 };
             let x_ptr = x.as_ptr();
-            let mut sum = 0.0f32;
 
+            let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
             let mut i = 0usize;
             while i + 4 <= n {
-                let v0 = *x_ptr.offset(ix);
-                let v1 = *x_ptr.offset(ix + incx);
-                let v2 = *x_ptr.offset(ix + 2 * incx);
-                let v3 = *x_ptr.offset(ix + 3 * incx);
-                sum += v0.abs();
-                sum += v1.abs();
-                sum += v2.abs();
-                sum += v3.abs();
+                s0 += (*x_ptr.offset(ix)).abs();
+                s1 += (*x_ptr.offset(ix + incx)).abs();
+                s2 += (*x_ptr.offset(ix + 2 * incx)).abs();
+                s3 += (*x_ptr.offset(ix + 3 * incx)).abs();
                 ix += 4 * incx;
                 i += 4;
             }
-
             while i < n {
-                sum += (*x_ptr.offset(ix)).abs();
+                s0 += (*x_ptr.offset(ix)).abs();
                 ix += incx;
                 i += 1;
             }
-
-            sum
+            (s0.algebraic_add(s1)) + (s2.algebraic_add(s3))
         }
     }
 }
@@ -1388,8 +1376,8 @@ pub fn rotg(a: &mut f32, b: &mut f32, c: &mut f32, s: &mut f32) {
     // This is trivial, if solve the equation taking second component of given vector as zero,
     // we would get this relation
     // From here we can say cos and sine is proportional to a and b,
-    *c = *a / r;
-    *s = *b / r;
+    *c = a.algebraic_div(r);
+    *s = b.algebraic_div(r);
 
     // This is by the intel docs ref to prevent floating point precision issues like (1 - (99999)^2) since s^2 + c^2 = 1
     // What/How this does? its compression, if (a) |cos| is larger than (b) |sin|, so we store smaller value, here means |sin| < 1
@@ -1399,7 +1387,7 @@ pub fn rotg(a: &mut f32, b: &mut f32, c: &mut f32, s: &mut f32) {
     let z = if a.abs() > b.abs() {
         *s
     } else if *c != 0.0 {
-        1.0 / *c
+        1.0f32.algebraic_div(*c)
     } else {
         1.0
     };

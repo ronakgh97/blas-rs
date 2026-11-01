@@ -2,12 +2,11 @@ use blas_rs::lvl1::{asum, axpy, dot, nrm2, scal};
 use blas_rs::lvl2::gemv;
 use blas_rs::lvl3::gemm;
 use blas_rs::utils::Noise;
+use clap::Parser;
 use std::arch::x86_64::{__rdtscp, _mm_lfence, _rdtsc};
-use std::env;
 use std::f64::consts::PI;
 use std::hint::black_box;
 use std::time::Instant;
-
 // Clean & less noise harness, preferable to be used with Intel Vtune/Advisor.
 // It runs a kernel for a given size and duration, and prints the number of runs, elapsed time, GFLOPS and cycle cost.
 
@@ -32,26 +31,29 @@ fn usage() {
     eprintln!("time_secs: profiling duration in seconds (default: 10)");
 }
 
+#[derive(Parser)]
+struct Cli {
+    #[arg(long, hide = true)]
+    bench: bool, // stupid fuckass cargo injects this flag when running `cargo bench`
+    // and it breaks clap parsing, so we hide it
+    kernel: String,
+    size: usize,
+    #[arg(default_value_t = 12.0)]
+    target_time: f64,
+}
+
 fn main() {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() < 3 {
-        usage();
-        std::process::exit(1);
-    }
-
-    let kernel = args[1].as_str();
-    let size: usize = args[2].parse().unwrap_or_else(|e| {
-        eprintln!("invalid size '{}': {}", args[2], e);
-        std::process::exit(1);
-    });
-    let time_secs: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(10.0);
+    let cli = Cli::parse();
+    let kernel = cli.kernel.as_str();
+    let size: usize = cli.size;
+    let target_time: f64 = cli.target_time;
 
     // pin core
-    let cores = core_affinity::get_core_ids().expect("Failed to get Core IDs");
-    println!("Available cores: {}", cores.len());
-    let core = cores[4];
-    core_affinity::set_for_current(core);
+    if let Some(cores) = core_affinity::get_core_ids() {
+        core_affinity::set_for_current(cores[4]);
+    } else {
+        eprintln!("Failed to get core ids, not pinning core");
+    };
 
     let mut noise = Noise::rng();
     let n2 = size * size;
@@ -163,7 +165,7 @@ fn main() {
     // main profiling loop
     eprintln!(
         "profiling: {} for {:.0}s (size={})...",
-        kernel, time_secs, size
+        kernel, target_time, size
     );
 
     let start = Instant::now();
@@ -174,7 +176,7 @@ fn main() {
         _rdtsc()
     };
 
-    while start.elapsed().as_secs_f64() < time_secs {
+    while start.elapsed().as_secs_f64() < target_time {
         match kernel {
             "axpy" => {
                 let _: () = {

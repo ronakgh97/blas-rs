@@ -1,114 +1,96 @@
 **BLAS FORTRAN 77** and **Intel Math Library** Kernels in modern native rust. `ONLY x86_64`
 
-refs I took:
-
-- https://www.netlib.org/blas/ ← good for overview
-- https://www.netlib.org/lapack/explore-html/ ←/
-- https://icl.utk.edu/~mgates3/docs/lapack.html ←/
-- https://suif.stanford.edu/papers/lam-asplos91.pdf  <- good for understanding cache blocking techniques & optimizations
-- https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/blas-routines.html ← good
-  details, very clear
-- https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html ← good man for intrinsics
-- https://doc.rust-lang.org/core/arch/x86_64/index.html#functions ←/
-- https://public.dhe.ibm.com/software/dw/cell/BLAS_Prog_Guide_API_v3.1.pdf <- api ref, mostly similar everywhere
-
-TODO:
-
-- lvl1: rotmg, rotm
-- lvl2: gemv - all
-- lvl3: gemm - all
-- handle NaN, over/underflow, return vs panic and many more edge cases :(
-- test code ref from [this](https://github.com/OpenMathLib/OpenBLAS/tree/develop) repo, currently ai-generated
-- multithreading, GPU maybe (NOT CUDA)?
-- LESS BAD BRANCHING, more SIMD, LESS FN CALLS, better DATA_READ, better CACHE
-- MAKE GEMV & GEMM FAST FOR ALL PATHS!!!
-- bench is somewhat UNFAIR AND NOT UNIFORM
-
-To bench, run **[harness](bench/main.rs)** using
-`cargo bench --bench main --- <kernel1> <kernel2> ...` [ref](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark)
-and build using `RUSTFLAGS target-cpu=x86-64-v3`, otherwise rustc will throw error. Or use `Intel Vtune/Advisor`
+[Bench ref](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark)
+To bench, run **[main harness](bench/main.rs)** using
+`cargo bench --bench main -- --kernels <kernel1> <kernel2> ...` (e.g.
+`--kernels axpy dot`) or the **[lite harness](bench/lite.rs)** using
+`cargo bench --bench lite -- <kernel> <size> [time_secs]` (e.g.
+`axpy 2048 12`).
+Build using `RUSTFLAGS target-cpu=x86-64-v3` (already set in `.cargo/config.toml`), otherwise rustc will throw error.
+Use `Intel Vtune/Advisor` with lite harness for profiling and better understanding, since lite harness has less noise
+and overhead.
 
 Install [Intel oneAPI Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/oneapi-toolkit-download.html?packages=oneapi-toolkit&oneapi-toolkit-os=linux&oneapi-lin=offline)
 then copy the `.dll` or `.so` into the project root:
 
-- windows > `Copy-Item "C:\Program Files (x86)\Intel\oneAPI\compiler\2026.0\bin\libiomp5md.dll" .`
+- windows > `Copy-Item "C:\Program Files (x86)\Intel\oneAPI\compiler\2026.2\bin\libiomp5md.dll" .`
 - linux > `cp /home/ronakgh97/intel/oneapi/compiler/latest/lib/libiomp5.so .`
 - mac > `sell that bullshit`
 
-> All are single threaded, ran on i7 14650hx, rust 1.97.1, last updated on 08/20/2026
+> All are single threaded, ran on i7 14650hx, rust 1.99.1, last updated on 08/20/2026
 
 **AXPY**
-![plot](bench/plot/axpy.png)
+![plot](bench/plots/axpy.png)
 
 | Size  | Run      | GFLOPS  | %GFLOPS   | %Latency  | WSS Cache | Cyc/Flop |
 |-------|----------|---------|-----------|-----------|-----------|----------|
-| 128   | 58524151 | 7.4911  | +11.3976% | -10.2315% | 100.00%   | 0.3229   |
-| 256   | 55360685 | 14.1723 | +10.1577% | -9.2210%  | 100.00%   | 0.1707   |
-| 512   | 49054090 | 25.1157 | +22.3982% | -18.2994% | 100.00%   | 0.0963   |
-| 1024  | 29526357 | 30.2350 | -22.3954% | +28.8583% | 100.00%   | 0.0800   |
-| 2048  | 15931282 | 32.6273 | -35.6184% | +55.3238% | 100.00%   | 0.0741   |
-| 4096  | 9392704  | 38.4725 | -31.0237% | +44.9773% | 100.00%   | 0.0629   |
-| 8192  | 3618502  | 29.6428 | +1.8525%  | -1.8188%  | 100.00%   | 0.0816   |
-| 16384 | 1740415  | 28.5149 | -0.4081%  | +0.4098%  | 100.00%   | 0.0848   |
+| 128   | 89941057 | 7.3291  | +29.1142% | -22.5492% | 100.00%   | 0.3301   |
+| 256   | 82070072 | 13.3753 | +4.1257%  | -3.9622%  | 100.00%   | 0.1809   |
+| 512   | 68915958 | 22.4631 | -5.6405%  | +5.9776%  | 100.00%   | 0.1077   |
+| 1024  | 52078382 | 33.9498 | -1.0246%  | +1.0352%  | 100.00%   | 0.0713   |
+| 2048  | 25760351 | 33.5863 | -33.9609% | +51.4254% | 100.00%   | 0.0720   |
+| 4096  | 14141593 | 36.8755 | -40.8994% | +69.2029% | 100.00%   | 0.0656   |
+| 8192  | 4862441  | 25.3585 | -12.0057% | +13.6437% | 100.00%   | 0.0954   |
+| 16384 | 2366736  | 24.6859 | -12.4315% | +14.1964% | 100.00%   | 0.0980   |
 
 **DOT**
-![plot](bench/plot/dot.png)
+![plot](bench/plots/dot.png)
 
 | Size  | Run      | GFLOPS   | %GFLOPS    | %Latency  | WSS Cache | Cyc/Flop |
 |-------|----------|----------|------------|-----------|-----------|----------|
-| 128   | 62846043 | 8.0443   | +16.1387%  | -13.8961% | 100.00%   | 0.3007   |
-| 256   | 61807547 | 15.8227  | +19.8706%  | -16.5767% | 100.00%   | 0.1529   |
-| 512   | 59659094 | 30.5455  | +37.8536%  | -27.4593% | 100.00%   | 0.0792   |
-| 1024  | 57196195 | 58.5689  | +89.1212%  | -47.1239% | 100.00%   | 0.0413   |
-| 2048  | 51153016 | 104.7614 | +129.0941% | -56.3498% | 100.00%   | 0.0231   |
-| 4096  | 40504206 | 165.9052 | +243.2078% | -70.8631% | 100.00%   | 0.0146   |
-| 8192  | 28652045 | 234.7176 | +726.7281% | -87.9041% | 100.00%   | 0.0103   |
-| 16384 | 18024791 | 295.3182 | +602.2187% | -85.7594% | 100.00%   | 0.0082   |
+| 128   | 97172315 | 7.9183   | +15.9379%  | -13.7470% | 100.00%   | 0.3055   |
+| 256   | 95571482 | 15.5757  | +22.4039%  | -18.3033% | 100.00%   | 0.1553   |
+| 512   | 93504124 | 30.4776  | +36.4360%  | -26.7056% | 100.00%   | 0.0794   |
+| 1024  | 88822557 | 57.9033  | +84.5812%  | -45.8233% | 100.00%   | 0.0418   |
+| 2048  | 80421242 | 104.8530 | +120.6582% | -54.6810% | 100.00%   | 0.0231   |
+| 4096  | 65436982 | 170.6328 | +253.0534% | -71.6757% | 100.00%   | 0.0142   |
+| 8192  | 46110922 | 240.4772 | +761.8483% | -88.3970% | 100.00%   | 0.0101   |
+| 16384 | 28966702 | 302.1336 | +796.8964% | -88.8504% | 100.00%   | 0.0080   |
 
 **NRM2**
-![plot](bench/plot/nrm2.png)
+![plot](bench/plots/nrm2.png)
 
 | Size  | Run      | GFLOPS  | %GFLOPS   | %Latency  | WSS Cache | Cyc/Flop |
 |-------|----------|---------|-----------|-----------|-----------|----------|
-| 128   | 42089412 | 5.3874  | -11.0229% | +12.3885% | 100.00%   | 0.4490   |
-| 256   | 35079135 | 8.9803  | -13.8755% | +16.1110% | 100.00%   | 0.2694   |
-| 512   | 27980944 | 14.3262 | -7.2883%  | +7.8612%  | 100.00%   | 0.1689   |
-| 1024  | 20163996 | 20.6479 | -3.5163%  | +3.6445%  | 100.00%   | 0.1172   |
-| 2048  | 12802602 | 26.2197 | -0.6175%  | +0.6214%  | 100.00%   | 0.0923   |
-| 4096  | 7366935  | 30.1750 | -0.4413%  | +0.4433%  | 100.00%   | 0.0802   |
-| 8192  | 3987749  | 32.6676 | +0.5686%  | -0.5654%  | 100.00%   | 0.0741   |
-| 16384 | 1960388  | 32.1190 | -1.3995%  | +1.4194%  | 100.00%   | 0.0753   |
+| 128   | 66938310 | 5.4546  | -11.0731% | +12.4519% | 100.00%   | 0.4435   |
+| 256   | 56053691 | 9.1353  | -11.9821% | +13.6132% | 100.00%   | 0.2648   |
+| 512   | 43465719 | 14.1676 | -7.2357%  | +7.8001%  | 100.00%   | 0.1708   |
+| 1024  | 31375086 | 20.4534 | -2.8502%  | +2.9338%  | 100.00%   | 0.1183   |
+| 2048  | 19249666 | 25.0977 | -3.2627%  | +3.3727%  | 100.00%   | 0.0964   |
+| 4096  | 11287349 | 29.4318 | +0.1733%  | -0.1730%  | 100.00%   | 0.0822   |
+| 8192  | 6124933  | 31.9427 | +1.2032%  | -1.1889%  | 100.00%   | 0.0757   |
+| 16384 | 2995423  | 31.2434 | -2.2605%  | +2.3128%  | 100.00%   | 0.0774   |
 
 **ASUM**
-![plot](bench/plot/asum.png)
+![plot](bench/plots/asum.png)
 
-| Size  | Run      | GFLOPS  | %GFLOPS   | %Latency  | WSS Cache | Cyc/Flop |
-|-------|----------|---------|-----------|-----------|-----------|----------|
-| 128   | 60014248 | 3.8409  | +10.1060% | -9.1784%  | 100.00%   | 0.6299   |
-| 256   | 56734936 | 7.2621  | +6.6010%  | -6.1923%  | 100.00%   | 0.3331   |
-| 512   | 52214053 | 13.3668 | +7.2522%  | -6.7618%  | 100.00%   | 0.1810   |
-| 1024  | 38650881 | 19.7893 | +0.2326%  | -0.2321%  | 100.00%   | 0.1222   |
-| 2048  | 26789160 | 27.4321 | -9.8139%  | +10.8818% | 100.00%   | 0.0882   |
-| 4096  | 16671274 | 34.1428 | -11.1818% | +12.5895% | 100.00%   | 0.0709   |
-| 8192  | 9463469  | 38.7624 | -12.8816% | +14.7863% | 100.00%   | 0.0624   |
-| 16384 | 4352208  | 35.6533 | -2.3183%  | +2.3733%  | 100.00%   | 0.0679   |
+| Size  | Run      | GFLOPS  | %GFLOPS  | %Latency  | WSS Cache | Cyc/Flop |
+|-------|----------|---------|----------|-----------|-----------|----------|
+| 128   | 92492200 | 3.7685  | +9.1669% | -8.3971%  | 100.00%   | 0.6420   |
+| 256   | 87042042 | 7.0928  | +5.0169% | -4.7772%  | 100.00%   | 0.3411   |
+| 512   | 78961025 | 12.8686 | +1.6656% | -1.6383%  | 100.00%   | 0.1880   |
+| 1024  | 62147836 | 20.2570 | -0.4838% | +0.4861%  | 100.00%   | 0.1194   |
+| 2048  | 42454010 | 27.6757 | -4.9534% | +5.2115%  | 100.00%   | 0.0874   |
+| 4096  | 26360601 | 34.3689 | -6.1872% | +6.5953%  | 100.00%   | 0.0704   |
+| 8192  | 14624152 | 38.1339 | -8.4910% | +9.2788%  | 100.00%   | 0.0634   |
+| 16384 | 4549961  | 23.7289 | -9.1763% | +10.1034% | 100.00%   | 0.1020   |
 
 **I_AMAX**
-![plot](bench/plot/i_amax.png)
+![plot](bench/plots/i_amax.png)
 
 | Size  | Run      | GFLOPS  | %GFLOPS    | %Latency   | WSS Cache | Cyc/Flop |
 |-------|----------|---------|------------|------------|-----------|----------|
-| 128   | 44813279 | 2.8680  | +104.0533% | -50.9932%  | 100.00%   | 0.8435   |
-| 256   | 35397197 | 4.5308  | +24.0493%  | -19.3869%  | 100.00%   | 0.5339   |
-| 512   | 25642587 | 6.5645  | -8.3386%   | +9.0972%   | 100.00%   | 0.3685   |
-| 1024  | 16961667 | 8.6844  | -29.5496%  | +41.9438%  | 100.00%   | 0.2786   |
-| 2048  | 9902440  | 10.1401 | -48.3213%  | +93.5032%  | 100.00%   | 0.2386   |
-| 4096  | 5414404  | 11.0887 | -59.1860%  | +145.0143% | 100.00%   | 0.2182   |
-| 8192  | 2816718  | 11.5373 | -63.4438%  | +173.5515% | 100.00%   | 0.2097   |
-| 16384 | 1417568  | 11.6127 | -61.0205%  | +156.5450% | 100.00%   | 0.2083   |
+| 128   | 68842003 | 2.8049  | +108.5877% | -52.0585%  | 100.00%   | 0.8625   |
+| 256   | 55157903 | 4.4947  | +69.1388%  | -40.8769%  | 100.00%   | 0.5382   |
+| 512   | 40548789 | 6.6084  | -3.9130%   | +4.0723%   | 100.00%   | 0.3661   |
+| 1024  | 25117705 | 8.1871  | -30.0589%  | +42.9775%  | 100.00%   | 0.2955   |
+| 2048  | 14790796 | 9.6421  | -47.6016%  | +90.8455%  | 100.00%   | 0.2509   |
+| 4096  | 7769712  | 10.1301 | -61.2189%  | +157.8577% | 100.00%   | 0.2388   |
+| 8192  | 4078681  | 10.6355 | -66.2962%  | +196.7024% | 100.00%   | 0.2275   |
+| 16384 | 2088511  | 10.8920 | -61.8741%  | +162.2888% | 100.00%   | 0.2221   |
 
 **GEMV**
-![plot](bench/plot/gemv.png)
+![plot](bench/plots/gemv.png)
 
 | Size  | Run     | GFLOPS  | %GFLOPS   | %Latency  | WSS Cache | Cyc/Flop |
 |-------|---------|---------|-----------|-----------|-----------|----------|
@@ -122,7 +104,7 @@ then copy the `.dll` or `.so` into the project root:
 | 16384 | 61      | 16.3223 | +3.2493%  | -3.1471%  | 0.20%     | 0.1482   |
 
 **GEMV_T**
-![plot](bench/plot/gemv_t.png)
+![plot](bench/plots/gemv_t.png)
 
 | Size  | Run     | GFLOPS  | %GFLOPS  | %Latency | WSS Cache | Cyc/Flop |
 |-------|---------|---------|----------|----------|-----------|----------|
@@ -136,7 +118,7 @@ then copy the `.dll` or `.so` into the project root:
 | 16384 | 61      | 16.2154 | -0.6713% | +0.6759% | 0.20%     | 0.1492   |
 
 **GEMM_F_F**
-![plot](bench/plot/gemm_f_f.png)
+![plot](bench/plots/gemm_f_f.png)
 
 | Size  | Run   | GFLOPS   | %GFLOPS   | %Latency   | WSS Cache | Cyc/Flop |
 |-------|-------|----------|-----------|------------|-----------|----------|
@@ -149,4 +131,29 @@ then copy the `.dll` or `.so` into the project root:
 | 8192  | 1     | 52.1073  | -60.8331% | +155.3175% | 0.16%     | 0.0464   |
 | 16384 | 1     | 51.7685  | -61.3525% | +158.7488% | 0.04%     | 0.0467   |
 
-Wanna improve the [bench](bench/main.rs) and added more kernels perf test? Send me a PR
+Want to improve the bench or fix nasty numeric edge cases? Send some PRs.
+
+---
+
+References I took:
+
+- https://www.netlib.org/blas/ ← good for overview
+- https://www.netlib.org/lapack/explore-html/ ←/
+- https://icl.utk.edu/~mgates3/docs/lapack.html ←/
+- https://suif.stanford.edu/papers/lam-asplos91.pdf  <- good for understanding cache blocking techniques & optimizations
+- https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/blas-routines.html ← good
+  details, very clear
+- https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html ← intel man for intrinsics
+- https://doc.rust-lang.org/core/arch/x86_64/index.html#functions ←/
+- https://public.dhe.ibm.com/software/dw/cell/BLAS_Prog_Guide_API_v3.1.pdf <- api ref, mostly similar everywhere
+
+TODO:
+
+- lvl1: rotmg, rotm
+- lvl2: gemv - all
+- lvl3: gemm - all
+- handle NaN, over/underflow, return vs panic and many more edge cases :(
+- multithreading, GPU maybe (NOT CUDA)?
+- LESS BAD BRANCHING, more SIMD, LESS FN CALLS, better DATA_READ, better CACHE
+- MAKE GEMV & GEMM FAST FOR ALL PATHS!!!
+- bench is somewhat UNFAIR AND NOT UNIFORM

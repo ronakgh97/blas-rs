@@ -1,179 +1,22 @@
-mod harness;
-mod utils;
+mod shared;
 
-use crate::harness::{MetricSet, run_bench};
-use crate::utils::*;
+use crate::shared::harness::{MetricSet, run_bench};
+use crate::shared::utils::*;
 use blas_rs::lvl1::{asum, axpy, dot, i_amax, nrm2};
 use blas_rs::lvl2::gemv;
 use blas_rs::lvl3::gemm;
 use blas_rs::utils::*;
-use std::error::Error;
-
+use clap::Parser;
 use colored::Colorize;
+use std::error::Error;
+use std::f64::consts::PI;
 use std::hint::black_box;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 extern crate intel_mkl_src;
 
-/// Format relative performance metrics with color coding
-#[inline(always)]
-fn fmt_rel(val: f64, inverse: bool) -> colored::ColoredString {
-    let s = format!("{val:>+.4}%");
-
-    if inverse {
-        if val < 0.0 {
-            s.green()
-        } else if val > 0.0 {
-            s.red()
-        } else {
-            s.normal()
-        }
-    } else {
-        if val > 0.0 {
-            s.green()
-        } else if val < 0.0 {
-            s.red()
-        } else {
-            s.normal()
-        }
-    }
-}
-
 // TODO: bench is doing some weird thing, need to investigate
 // Bench uses this as ref: https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark
-
-fn warmup(noise: &mut Noise, r: usize, s: usize) {
-    let mut a = vec![0.0f32; s * s];
-    let mut x = vec![0.0f32; s];
-    let mut y = vec![0.0f32; s];
-
-    black_box(&mut a);
-    black_box(&mut x);
-    black_box(&mut y);
-
-    // Warmup phase
-    for i in 0..r {
-        noise.fill_f32(&mut a);
-        noise.fill_f32(&mut x);
-        y.fill(1.0);
-
-        {
-            axpy(s, (i % 7) as f32, &y, 1, &mut vec![0.0f32; s], 1);
-
-            dot(s, &y, 1, &vec![0.0f32; s], 1);
-
-            asum(s, &y, 1);
-
-            nrm2(s, &y, 1);
-
-            i_amax(s, &y, 1);
-
-            gemv(
-                s,
-                s,
-                (i % 3) as f32,
-                &a,
-                s,
-                &x,
-                1,
-                (i % 5) as f32,
-                &mut y,
-                1,
-                false,
-            );
-
-            gemv(
-                s,
-                s,
-                (i % 3) as f32,
-                &a,
-                s,
-                &x,
-                1,
-                (i % 5) as f32,
-                &mut y,
-                1,
-                true,
-            );
-
-            gemm(
-                s,
-                s,
-                s,
-                (i % 3) as f32,
-                &a,
-                s,
-                &a,
-                s,
-                (i % 5) as f32,
-                &mut vec![1.0f32; s * s],
-                s,
-                false,
-                false,
-            );
-        }
-
-        noise.fill_f32(&mut a);
-        noise.fill_f32(&mut x);
-        y.fill(1.0);
-
-        {
-            axpy_intel_mkl(s as i32, (i % 7) as f32, &y, 1, &mut vec![0.0f32; s], 1);
-
-            dot_intel_mkl(s as i32, &y, 1, &vec![0.0f32; s], 1);
-
-            asum_intel_mkl(s as i32, &y, 1);
-
-            nrm2_intel_mkl(s as i32, &y, 1);
-
-            i_amax_intel_mkl(s as i32, &y, 1);
-
-            gemv_intel_mkl(
-                s as i32,
-                s as i32,
-                (i % 3) as f32,
-                &a,
-                s as i32,
-                &x,
-                1,
-                (i % 5) as f32,
-                &mut y,
-                1,
-                false,
-            );
-
-            gemv_intel_mkl(
-                s as i32,
-                s as i32,
-                (i % 3) as f32,
-                &a,
-                s as i32,
-                &x,
-                1,
-                (i % 5) as f32,
-                &mut y,
-                1,
-                true,
-            );
-
-            gemm_intel_mkl(
-                s as i32,
-                s as i32,
-                s as i32,
-                (i % 3) as f32,
-                &a,
-                s as i32,
-                &a,
-                s as i32,
-                (i % 5) as f32,
-                &mut vec![1.0f32; s * s],
-                s as i32,
-                false,
-                false,
-            );
-        }
-    }
-}
 
 // TODO; add arithmetic intensity
 enum BenchMetrics {
@@ -185,6 +28,17 @@ enum BenchMetrics {
     CycleCost(Vec<(f64, f64)>), // TSC delta: invariant reference cycles, not turbo core clocks.
 }
 
+#[derive(Parser)]
+struct CLi {
+    #[arg(long, hide = true)]
+    bench: bool, // stupid fuckass cargo injects this flag when running `cargo bench`
+    // and it breaks clap parsing, so we hide it
+    #[arg(short, long, num_args = 1..)]
+    kernels: Vec<String>,
+    #[arg(short, long, default_value_t = PI)]
+    target_time: f64,
+}
+
 fn main() {
     unsafe {
         std::env::set_var("MKL_NUM_THREADS", "1");
@@ -194,63 +48,63 @@ fn main() {
     // so its write-bandwidth bound, even it whole vectors fits in cache and also "cache" does not help much since those 8 lanes are not reused.
     // while dot is just most read heavy, and accumulated in 4 sum register, less overhead, finally the `cache miss` is heuristic metrics as said earlier
 
-    // BENCH TOTAL; `target_time` = (sample_len * no of bench) seconds
-    let target_time = 2.0;
+    let cli = CLi::parse();
+    // bench will take minimum time of `target time * sample_len * kernel_len`
+    let target_time = cli.target_time;
     let size_sample = [128, 256, 512, 1024, 2048, 4096, 8192, 16384];
 
-    let plot_path = Path::new("./bench/plot");
-
-    let kernels_to_run: Vec<String> = std::env::args().collect();
-
-    if kernels_to_run.is_empty() {
-        eprintln!("Usage: bencher <kernel1> <kernel2> ...");
-        std::process::exit(1);
-    }
-
-    // pin core
-    let cores = core_affinity::get_core_ids().expect("Failed to get Core IDs");
-    println!("Available cores: {}", cores.len());
-    let core = cores[4];
-    core_affinity::set_for_current(core);
+    // try pinning core
+    if let Some(cores) = core_affinity::get_core_ids() {
+        core_affinity::set_for_current(cores[4]);
+    } else {
+        eprintln!("Failed to get core ids, not pinning core");
+    };
 
     println!("Heating up!!!");
     let mut noise = Noise::rng();
     warmup(&mut noise, 64, 2048);
 
-    for k in kernels_to_run {
+    let plot_path = PathBuf::from("bench/plots");
+    std::fs::create_dir_all(&plot_path).ok();
+    let plot_path = &plot_path;
+    for k in cli.kernels {
         match k.trim().to_lowercase().as_str() {
             "axpy" => {
                 println!("Running AXPY benchmark...");
                 bench_axpy(&mut noise, &size_sample, target_time, plot_path)
             }
-            "asum" => {
-                println!("Running ASUM benchmark...");
-                bench_asum(&mut noise, &size_sample, target_time, plot_path)
+            "dot" => {
+                println!("Running DOT benchmark...");
+                bench_dot(&mut noise, &size_sample, target_time, plot_path)
             }
             "nrm2" => {
                 println!("Running NRM2 benchmark...");
                 bench_nrm2(&mut noise, &size_sample, target_time, plot_path)
             }
-            "dot" => {
-                println!("Running DOT benchmark...");
-                bench_dot(&mut noise, &size_sample, target_time, plot_path)
+            "asum" => {
+                println!("Running ASUM benchmark...");
+                bench_asum(&mut noise, &size_sample, target_time, plot_path)
+            }
+            "i_amax" => {
+                println!("Running I_AMAX benchmark...");
+                bench_i_amax(&mut noise, &size_sample, target_time, plot_path)
             }
             "gemv" => {
                 println!("Running GEMV benchmark...");
                 bench_gemv(&mut noise, &size_sample, target_time, plot_path)
             }
             "gemv_t" => {
-                println!("Running GEMV Transposed benchmark...");
+                println!("Running GEMV_T benchmark...");
                 bench_gemv_t(&mut noise, &size_sample, target_time, plot_path)
             }
-            "gemm" => {
-                println!("Running GEMM benchmark...");
+            "gemm_n_n" => {
+                println!("Running GEMM_N_N benchmark...");
                 bench_gemm_f_f(&mut noise, &size_sample, target_time, plot_path)
             }
-            "i_amax" => {
-                println!("Running I_AMAX benchmark...");
-                bench_i_amax(&mut noise, &size_sample, target_time, plot_path)
-            }
+            // "gemm_t_n" => {
+            //     println!("Running GEMM_T_N benchmark...");
+            //     bench_gemm_t_f(&mut noise, &size_sample, target_time, plot_path)
+            // }
             _ => {}
         }
     }
@@ -267,6 +121,10 @@ fn bench_axpy(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_p
         let mut x_buf = vec![0.0f32; i];
         let mut y1_buf = vec![0.0f32; i];
         let mut y2_buf = vec![0.0f32; i];
+
+        black_box(&mut x_buf);
+        black_box(&mut y1_buf);
+        black_box(&mut y2_buf);
 
         noise.fill_f32(&mut x_buf);
 
@@ -341,6 +199,102 @@ fn bench_axpy(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_p
     }
 }
 
+fn bench_dot(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_path: &Path) {
+    let mut metrics: Vec<BenchMetrics> = Vec::with_capacity(6);
+    let mut collector = MetricSet::with_capacity(size_sample.len());
+
+    println!("| Size | Run | GFLOPS | %GFLOPS | %Latency | WSS Cache | Cyc/Flop |");
+    println!("|------|-----|--------|---------|----------|-----------|----------|");
+
+    for &i in size_sample {
+        let mut x_buf = vec![0.0f32; i];
+        let mut y1_buf = vec![0.0f32; i];
+        let mut y2_buf = vec![0.0f32; i];
+
+        black_box(&mut x_buf);
+        black_box(&mut y1_buf);
+        black_box(&mut y2_buf);
+
+        noise.fill_f32(&mut x_buf);
+
+        y1_buf.fill(1.0);
+        let (rc, toc, tsc) = run_bench(
+            || {
+                dot(i, &x_buf, 1, &y1_buf, 1);
+            },
+            target_time,
+        );
+
+        y2_buf.fill(1.0);
+        let (rc_intel, toc_intel, tsc_intel) = run_bench(
+            || {
+                dot_intel_mkl(i as i32, &x_buf, 1, &y2_buf, 1);
+            },
+            target_time,
+        );
+
+        let working_kb = 2.0 * i as f64 * size_of::<f32>() as f64 / 1024.0; // x read + y read/write
+        let total_flops = 2.0 * i as f64 * rc; // 2n FLOPs per dot call
+        let total_flops_intel = 2.0 * i as f64 * rc_intel;
+
+        let (
+            gflops,
+            gflops_intel,
+            latency,
+            latency_intel,
+            cache_eff,
+            cyc_per_flop,
+            _cyc_per_flop_intel,
+        ) = MetricSet::derive(
+            rc,
+            rc_intel,
+            toc,
+            toc_intel,
+            tsc,
+            tsc_intel,
+            total_flops,
+            total_flops_intel,
+            working_kb,
+        );
+
+        let gflops_rel = (gflops - gflops_intel) / gflops_intel * 100.0;
+        let latency_rel = (latency - latency_intel) / latency_intel * 100.0;
+
+        collector.collect(
+            ((i as f64).log10(), gflops),
+            ((i as f64).log10(), latency.log10()),
+            ((i as f64).log10(), cache_eff),
+            ((i as f64).log10(), cyc_per_flop),
+            ((i as f64).log10(), gflops_rel),
+            ((i as f64).log10(), latency_rel),
+        );
+
+        println!(
+            "| {:>.0} | {:>.0} | {:>.4} | {} | {} | {:>.2}% | {:>.4} |",
+            i,
+            rc,
+            gflops,
+            fmt_rel(gflops_rel, false),
+            fmt_rel(latency_rel, true),
+            cache_eff,
+            cyc_per_flop
+        );
+
+        // reset, avoid hot cache possibility, we don't do 'TRUST ME BRO' BENCH
+        noise.fill_f32(&mut x_buf);
+        noise.fill_f32(&mut y1_buf);
+        noise.fill_f32(&mut y2_buf);
+    }
+    collector.finalize(&mut metrics);
+
+    match plot_bench(&metrics, &plot_path.join("dot.png")) {
+        Ok(_) => println!(),
+        Err(err) => {
+            eprintln!("failed to render benchmark plot: {err}");
+        }
+    }
+}
+
 fn bench_nrm2(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_path: &Path) {
     let mut metrics: Vec<BenchMetrics> = Vec::with_capacity(6);
     let mut collector = MetricSet::with_capacity(size_sample.len());
@@ -350,6 +304,8 @@ fn bench_nrm2(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_p
 
     for &i in size_sample {
         let mut x_buf = vec![0.0f32; i];
+
+        black_box(&mut x_buf);
 
         noise.fill_f32(&mut x_buf);
 
@@ -436,6 +392,8 @@ fn bench_asum(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_p
     for &i in size_sample {
         let mut x_buf = vec![0.0f32; i];
 
+        black_box(&mut x_buf);
+
         noise.fill_f32(&mut x_buf);
 
         let (rc, toc, tsc) = run_bench(
@@ -511,98 +469,6 @@ fn bench_asum(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_p
     }
 }
 
-fn bench_dot(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_path: &Path) {
-    let mut metrics: Vec<BenchMetrics> = Vec::with_capacity(6);
-    let mut collector = MetricSet::with_capacity(size_sample.len());
-
-    println!("| Size | Run | GFLOPS | %GFLOPS | %Latency | WSS Cache | Cyc/Flop |");
-    println!("|------|-----|--------|---------|----------|-----------|----------|");
-
-    for &i in size_sample {
-        let mut x_buf = vec![0.0f32; i];
-        let mut y1_buf = vec![0.0f32; i];
-        let mut y2_buf = vec![0.0f32; i];
-
-        noise.fill_f32(&mut x_buf);
-
-        y1_buf.fill(1.0);
-        let (rc, toc, tsc) = run_bench(
-            || {
-                dot(i, &x_buf, 1, &y1_buf, 1);
-            },
-            target_time,
-        );
-
-        y2_buf.fill(1.0);
-        let (rc_intel, toc_intel, tsc_intel) = run_bench(
-            || {
-                dot_intel_mkl(i as i32, &x_buf, 1, &y2_buf, 1);
-            },
-            target_time,
-        );
-
-        let working_kb = 2.0 * i as f64 * size_of::<f32>() as f64 / 1024.0; // x read + y read/write
-        let total_flops = 2.0 * i as f64 * rc; // 2n FLOPs per dot call
-        let total_flops_intel = 2.0 * i as f64 * rc_intel;
-
-        let (
-            gflops,
-            gflops_intel,
-            latency,
-            latency_intel,
-            cache_eff,
-            cyc_per_flop,
-            _cyc_per_flop_intel,
-        ) = MetricSet::derive(
-            rc,
-            rc_intel,
-            toc,
-            toc_intel,
-            tsc,
-            tsc_intel,
-            total_flops,
-            total_flops_intel,
-            working_kb,
-        );
-
-        let gflops_rel = (gflops - gflops_intel) / gflops_intel * 100.0;
-        let latency_rel = (latency - latency_intel) / latency_intel * 100.0;
-
-        collector.collect(
-            ((i as f64).log10(), gflops),
-            ((i as f64).log10(), latency.log10()),
-            ((i as f64).log10(), cache_eff),
-            ((i as f64).log10(), cyc_per_flop),
-            ((i as f64).log10(), gflops_rel),
-            ((i as f64).log10(), latency_rel),
-        );
-
-        println!(
-            "| {:>.0} | {:>.0} | {:>.4} | {} | {} | {:>.2}% | {:>.4} |",
-            i,
-            rc,
-            gflops,
-            fmt_rel(gflops_rel, false),
-            fmt_rel(latency_rel, true),
-            cache_eff,
-            cyc_per_flop
-        );
-
-        // reset, avoid hot cache possibility, we don't do 'TRUST ME BRO' BENCH
-        noise.fill_f32(&mut x_buf);
-        noise.fill_f32(&mut y1_buf);
-        noise.fill_f32(&mut y2_buf);
-    }
-    collector.finalize(&mut metrics);
-
-    match plot_bench(&metrics, &plot_path.join("dot.png")) {
-        Ok(_) => println!(),
-        Err(err) => {
-            eprintln!("failed to render benchmark plot: {err}");
-        }
-    }
-}
-
 fn bench_i_amax(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_path: &Path) {
     let mut metrics: Vec<BenchMetrics> = Vec::with_capacity(6);
     let mut collector = MetricSet::with_capacity(size_sample.len());
@@ -612,6 +478,8 @@ fn bench_i_amax(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot
 
     for &i in size_sample {
         let mut x_buf = vec![0.0f32; i];
+
+        black_box(&mut x_buf);
 
         noise.fill_f32(&mut x_buf);
 
@@ -700,6 +568,11 @@ fn bench_gemv(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_p
         let mut x_buf = vec![0.0f32; i];
         let mut y1_buf = vec![0.0f32; i];
         let mut y2_buf = vec![0.0f32; i];
+
+        black_box(&mut a_buf);
+        black_box(&mut x_buf);
+        black_box(&mut y1_buf);
+        black_box(&mut y2_buf);
 
         noise.fill_f32(&mut a_buf);
         noise.fill_f32(&mut x_buf);
@@ -821,6 +694,11 @@ fn bench_gemv_t(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot
         let mut y1_buf = vec![0.0f32; i];
         let mut y2_buf = vec![0.0f32; i];
 
+        black_box(&mut a_buf);
+        black_box(&mut x_buf);
+        black_box(&mut y1_buf);
+        black_box(&mut y2_buf);
+
         noise.fill_f32(&mut a_buf);
         noise.fill_f32(&mut x_buf);
 
@@ -939,6 +817,11 @@ fn bench_gemm_f_f(noise: &mut Noise, size_sample: &[usize], target_time: f64, pl
         let mut x_buf = vec![0.0f32; i * i];
         let mut y1_buf = vec![0.0f32; i * i];
         let mut y2_buf = vec![0.0f32; i * i];
+
+        black_box(&mut a_buf);
+        black_box(&mut x_buf);
+        black_box(&mut y1_buf);
+        black_box(&mut y2_buf);
 
         noise.fill_f32(&mut a_buf);
         noise.fill_f32(&mut x_buf);
@@ -1167,4 +1050,204 @@ fn plot_bench(bench_metrics: &[BenchMetrics], output: &Path) -> Result<(), Box<d
     root.present()?;
 
     Ok(())
+}
+
+fn fmt_rel(val: f64, inverse: bool) -> colored::ColoredString {
+    let s = format!("{val:>+.4}%");
+
+    if inverse {
+        if val < 0.0 {
+            s.green()
+        } else if val > 0.0 {
+            s.red()
+        } else {
+            s.normal()
+        }
+    } else {
+        if val > 0.0 {
+            s.green()
+        } else if val < 0.0 {
+            s.red()
+        } else {
+            s.normal()
+        }
+    }
+}
+
+fn warmup(noise: &mut Noise, run_count: usize, sample_size: usize) {
+    let mut a = vec![0.0f32; sample_size * sample_size];
+    let mut x = vec![0.0f32; sample_size];
+    let mut y = vec![0.0f32; sample_size];
+
+    black_box(&mut a);
+    black_box(&mut x);
+    black_box(&mut y);
+
+    for i in 0..run_count {
+        noise.fill_f32(&mut a);
+        noise.fill_f32(&mut x);
+        y.fill(1.0);
+
+        {
+            axpy(
+                sample_size,
+                (i % 7) as f32,
+                &y,
+                1,
+                &mut vec![0.0f32; sample_size],
+                1,
+            );
+
+            dot(sample_size, &y, 1, &vec![0.0f32; sample_size], 1);
+
+            asum(sample_size, &y, 1);
+
+            nrm2(sample_size, &y, 1);
+
+            i_amax(sample_size, &y, 1);
+
+            gemv(
+                sample_size,
+                sample_size,
+                (i % 3) as f32,
+                &a,
+                sample_size,
+                &x,
+                1,
+                (i % 5) as f32,
+                &mut y,
+                1,
+                false,
+            );
+
+            gemv(
+                sample_size,
+                sample_size,
+                (i % 3) as f32,
+                &a,
+                sample_size,
+                &x,
+                1,
+                (i % 5) as f32,
+                &mut y,
+                1,
+                true,
+            );
+
+            gemm(
+                sample_size,
+                sample_size,
+                sample_size,
+                (i % 3) as f32,
+                &a,
+                sample_size,
+                &a,
+                sample_size,
+                (i % 5) as f32,
+                &mut vec![1.0f32; sample_size * sample_size],
+                sample_size,
+                false,
+                false,
+            );
+
+            gemm(
+                sample_size,
+                sample_size,
+                sample_size,
+                (i % 3) as f32,
+                &a,
+                sample_size,
+                &a,
+                sample_size,
+                (i % 5) as f32,
+                &mut vec![1.0f32; sample_size * sample_size],
+                sample_size,
+                true,
+                false,
+            );
+        }
+
+        noise.fill_f32(&mut a);
+        noise.fill_f32(&mut x);
+        y.fill(1.0);
+
+        {
+            axpy_intel_mkl(
+                sample_size as i32,
+                (i % 7) as f32,
+                &y,
+                1,
+                &mut vec![0.0f32; sample_size],
+                1,
+            );
+
+            dot_intel_mkl(sample_size as i32, &y, 1, &vec![0.0f32; sample_size], 1);
+
+            asum_intel_mkl(sample_size as i32, &y, 1);
+
+            nrm2_intel_mkl(sample_size as i32, &y, 1);
+
+            i_amax_intel_mkl(sample_size as i32, &y, 1);
+
+            gemv_intel_mkl(
+                sample_size as i32,
+                sample_size as i32,
+                (i % 3) as f32,
+                &a,
+                sample_size as i32,
+                &x,
+                1,
+                (i % 5) as f32,
+                &mut y,
+                1,
+                false,
+            );
+
+            gemv_intel_mkl(
+                sample_size as i32,
+                sample_size as i32,
+                (i % 3) as f32,
+                &a,
+                sample_size as i32,
+                &x,
+                1,
+                (i % 5) as f32,
+                &mut y,
+                1,
+                true,
+            );
+
+            gemm_intel_mkl(
+                sample_size as i32,
+                sample_size as i32,
+                sample_size as i32,
+                (i % 3) as f32,
+                &a,
+                sample_size as i32,
+                &a,
+                sample_size as i32,
+                (i % 5) as f32,
+                &mut vec![1.0f32; sample_size * sample_size],
+                sample_size as i32,
+                false,
+                false,
+            );
+
+            gemm_intel_mkl(
+                sample_size as i32,
+                sample_size as i32,
+                sample_size as i32,
+                (i % 3) as f32,
+                &a,
+                sample_size as i32,
+                &a,
+                sample_size as i32,
+                (i % 5) as f32,
+                &mut vec![1.0f32; sample_size * sample_size],
+                sample_size as i32,
+                true,
+                false,
+            );
+        }
+    }
 }

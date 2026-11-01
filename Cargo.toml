@@ -1,6 +1,6 @@
 [package]
 name = "blas-rs"
-version = "1.0.0-alpha.10"
+version = "1.1.0-alpha.1"
 edition = "2024"
 authors = ["ronakgh {ronakgh97@gmail.com}"]
 description = "Experimental F32 BLAS & Intel Math kernels library for x86_64 cpus"
@@ -37,18 +37,19 @@ lto = "fat"
 debug = true
 
 [dependencies]
-rand = "0.10.1"
+rand = "0.10.3"
 # rand_xoshiro = "0.8.1" # apparently my impl of xoshiro is better suited :)
 # rayon = "1.12.0" # for cpu parallel computations
-# cudarc = { version = "0.19.8", features = ["cuda-13030"] } # cuda or wgpu? :/
+# wgpu = "30.0.1"
 
 [dev-dependencies]
-plotters = "0.3.7" # for plotting benchmarks
 blas = "0.23.0" # for BLAS bindings, used in the reference implementation and benchmarks
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
+clap = { version = "4.6.7", features = ["derive"] }
+plotters = "0.3.7" # for plotting benchmarks
 core_affinity = "0.8.3"
-# ittapi = "0.5.0" intel accurate tracing api
 colored = "3.1.1"
+# ittapi = "0.5.0" intel accurate tracing api
 
 # safetensors = "0.8.0"
 # image = "0.25.10"
