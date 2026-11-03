@@ -60,7 +60,7 @@ pub fn gemv(
     let incx_isize = incx as isize;
     let incy_isize = incy as isize;
 
-    const PREFETCH_DIST: usize = 128;
+    const PREFETCH_DIST: usize = 256;
 
     // NOTE; bench insights TODO;
 
@@ -110,8 +110,8 @@ pub fn gemv(
                     let col4 = a_ptr.add((j + 4) * lda);
                     let col5 = a_ptr.add((j + 5) * lda);
 
-                    // _mm_prefetch(a_ptr.add((j + 6) * lda) as *const i8, _MM_HINT_T0);
-                    // _mm_prefetch(a_ptr.add((j + 12) * lda) as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(a_ptr.add((j + 6) * lda) as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(a_ptr.add((j + 7) * lda) as *const i8, _MM_HINT_T1);
 
                     // process 32 rows (load 4 reg for y and ~6 reg for a's col and 4 for store)
                     let mut i = 0usize;
@@ -283,8 +283,8 @@ pub fn gemv(
                     let bx = _mm256_set1_ps(alpha_x);
                     let col = a_ptr.add(j * lda);
 
-                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(a_ptr.add((j + 1) * lda) as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(a_ptr.add((j + 8) * lda) as *const i8, _MM_HINT_T0);
 
                     let mut i = 0usize;
                     while i + 32 <= m {
@@ -361,7 +361,6 @@ pub fn gemv(
 
         // simd path, load columns of A and x, do dot product, store to y;
         // prefetch/pray future columns of A for rizzing cpu-chan
-
         if incx == 1 && incy == 1 {
             unsafe {
                 let mut j = 0usize;
@@ -403,7 +402,7 @@ pub fn gemv(
 
                     let mut i = 0usize;
 
-                    // TODO; 6 col unroling will stack pill?
+                    // TODO; 6 col unrolling will stack spill?
                     while i + 32 <= m {
                         _mm_prefetch(col0.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
                         _mm_prefetch(col2.add(i + PREFETCH_DIST) as *const i8, _MM_HINT_T0);
@@ -427,25 +426,25 @@ pub fn gemv(
                         sum1_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i + 16)), x2, sum1_0);
                         sum1_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col1.add(i + 24)), x3, sum1_1);
 
-                        //compute fma for col2
+                        // compute fma for col2
                         sum2_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i)), x0, sum2_0);
                         sum2_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i + 8)), x1, sum2_1);
                         sum2_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i + 16)), x2, sum2_0);
                         sum2_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col2.add(i + 24)), x3, sum2_1);
 
-                        //compute fma for col 3
+                        // compute fma for col 3
                         sum3_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i)), x0, sum3_0);
                         sum3_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i + 8)), x1, sum3_1);
                         sum3_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i + 16)), x2, sum3_0);
                         sum3_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col3.add(i + 24)), x3, sum3_1);
 
-                        //compute fma for col 4
+                        // compute fma for col 4
                         sum4_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col4.add(i)), x0, sum4_0);
                         sum4_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col4.add(i + 8)), x1, sum4_1);
                         sum4_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col4.add(i + 16)), x2, sum4_0);
                         sum4_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col4.add(i + 24)), x3, sum4_1);
 
-                        //compute fma for col 4
+                        // compute fma for col 5
                         sum5_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col5.add(i)), x0, sum5_0);
                         sum5_1 = _mm256_fmadd_ps(_mm256_loadu_ps(col5.add(i + 8)), x1, sum5_1);
                         sum5_0 = _mm256_fmadd_ps(_mm256_loadu_ps(col5.add(i + 16)), x2, sum5_0);
@@ -718,52 +717,52 @@ fn gemv_test() {
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-#[inline(always)]
-/// The symv routines compute a scalar-matrix-vector product and add the result to a scalar-vector product, with a symmetric matrix.
-/// [ref](http://intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/symv.html)
-pub fn symv(
-    n: usize,   // col,rows of mat
-    alpha: f32, // scaling for product
-    a: &[f32],  // input matrix buf
-    lda: usize, // leading dim of a, row or col major depends, but we follow `column major`
-    x: &[f32],  // mul vector buf
-    incx: i32,
-    beta: f32,     // y scaling
-    y: &mut [f32], // resultant buf
-    incy: i32,
-    uplo: bool, // `true` for upper, `false` for lower
-) {
-    if incx == 0 || incy == 0 {
-        panic!("incx and incy must be non-zero");
-    }
-    if lda == 0 || lda < n {
-        panic!("lda must be >= m and non-zero");
-    }
-
-    if n == 0 {
-        panic!("Matrix dimensions must be greater than zero");
-    }
-
-    // `(n - 1) * lda` is start of last col, since we are col major,
-    // so we added n to get the last element of that col
-    if a.len() < (n - 1) * lda + n {
-        panic!("Matrix A is too short for the given dimensions and leading dimension");
-    }
-
-    // check inner dim
-    if (x.len() < (1 + (n - 1) * incx.unsigned_abs() as usize))
-        || (y.len() < (1 + (n - 1) * incy.unsigned_abs() as usize))
-    {
-        panic!("Vector x is too short for the given dimensions, increment and transposition");
-    }
-
-    // we use `scal` to handle the beta scaling and zeroing out y if beta is 0, as per BLAS spec
-    scal(n, beta, y, incy);
-
-    if alpha == 0.0 {
-        return;
-    }
-
-    if !uplo {}
-}
+// #[allow(clippy::too_many_arguments)]
+// #[inline(always)]
+// /// The symv routines compute a scalar-matrix-vector product and add the result to a scalar-vector product, with a symmetric matrix.
+// /// [ref](http://intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/symv.html)
+// pub fn symv(
+//     n: usize,   // col,rows of mat
+//     alpha: f32, // scaling for product
+//     a: &[f32],  // input matrix buf
+//     lda: usize, // leading dim of a, row or col major depends, but we follow `column major`
+//     x: &[f32],  // mul vector buf
+//     incx: i32,
+//     beta: f32,     // y scaling
+//     y: &mut [f32], // resultant buf
+//     incy: i32,
+//     uplo: bool, // `true` for upper, `false` for lower
+// ) {
+//     if incx == 0 || incy == 0 {
+//         panic!("incx and incy must be non-zero");
+//     }
+//     if lda == 0 || lda < n {
+//         panic!("lda must be >= m and non-zero");
+//     }
+//
+//     if n == 0 {
+//         panic!("Matrix dimensions must be greater than zero");
+//     }
+//
+//     // `(n - 1) * lda` is start of last col, since we are col major,
+//     // so we added n to get the last element of that col
+//     if a.len() < (n - 1) * lda + n {
+//         panic!("Matrix A is too short for the given dimensions and leading dimension");
+//     }
+//
+//     // check inner dim
+//     if (x.len() < (1 + (n - 1) * incx.unsigned_abs() as usize))
+//         || (y.len() < (1 + (n - 1) * incy.unsigned_abs() as usize))
+//     {
+//         panic!("Vector x is too short for the given dimensions, increment and transposition");
+//     }
+//
+//     // we use `scal` to handle the beta scaling and zeroing out y if beta is 0, as per BLAS spec
+//     scal(n, beta, y, incy);
+//
+//     if alpha == 0.0 {
+//         return;
+//     }
+//
+//     if !uplo {}
+// }

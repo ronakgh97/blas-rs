@@ -63,6 +63,12 @@ fn main() {
     let mut x = vec![0.0f32; size];
     let mut y = vec![0.0f32; size];
 
+    black_box(&mut a);
+    black_box(&mut b);
+    black_box(&mut c);
+    black_box(&mut x);
+    black_box(&mut y);
+
     noise.fill_f32(&mut a);
     noise.fill_f32(&mut b);
     noise.fill_f32(&mut x);
