@@ -35,6 +35,8 @@ struct CLi {
     // and it breaks clap parsing, so we hide it
     #[arg(short, long, num_args = 1..)]
     kernels: Vec<String>,
+    #[arg(short, long, default_value_t = 32)]
+    warmup_count: usize,
     #[arg(short, long, default_value_t = PI)]
     target_time: f64,
 }
@@ -62,7 +64,7 @@ fn main() {
 
     println!("Heating up!!!");
     let mut noise = Noise::rng();
-    warmup(&mut noise, 64, 2048);
+    warmup(&mut noise, cli.warmup_count, 1024);
 
     let plot_path = PathBuf::from("bench/plots");
     std::fs::create_dir_all(&plot_path).ok();
@@ -89,9 +91,9 @@ fn main() {
                 println!("Running I_AMAX benchmark...");
                 bench_i_amax(&mut noise, &size_sample, target_time, plot_path)
             }
-            "gemv" => {
-                println!("Running GEMV benchmark...");
-                bench_gemv(&mut noise, &size_sample, target_time, plot_path)
+            "gemv_n" => {
+                println!("Running GEMV_N benchmark...");
+                bench_gemv_n(&mut noise, &size_sample, target_time, plot_path)
             }
             "gemv_t" => {
                 println!("Running GEMV_T benchmark...");
@@ -99,12 +101,12 @@ fn main() {
             }
             "gemm_n_n" => {
                 println!("Running GEMM_N_N benchmark...");
-                bench_gemm_f_f(&mut noise, &size_sample, target_time, plot_path)
+                bench_gemm_n_n(&mut noise, &size_sample, target_time, plot_path)
             }
-            // "gemm_t_n" => {
-            //     println!("Running GEMM_T_N benchmark...");
-            //     bench_gemm_t_f(&mut noise, &size_sample, target_time, plot_path)
-            // }
+            "gemm_t_n" => {
+                println!("Running GEMM_T_N benchmark...");
+                bench_gemm_t_n(&mut noise, &size_sample, target_time, plot_path)
+            }
             _ => {}
         }
     }
@@ -556,7 +558,7 @@ fn bench_i_amax(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot
     }
 }
 
-fn bench_gemv(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_path: &Path) {
+fn bench_gemv_n(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_path: &Path) {
     let mut metrics: Vec<BenchMetrics> = Vec::with_capacity(6);
     let mut collector = MetricSet::with_capacity(size_sample.len());
 
@@ -673,7 +675,7 @@ fn bench_gemv(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_p
     }
     collector.finalize(&mut metrics);
 
-    match plot_bench(&metrics, &plot_path.join("gemv.png")) {
+    match plot_bench(&metrics, &plot_path.join("gemv_n.png")) {
         Ok(_) => println!(),
         Err(err) => {
             eprintln!("failed to render benchmark plot: {err}");
@@ -805,7 +807,7 @@ fn bench_gemv_t(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot
     }
 }
 
-fn bench_gemm_f_f(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_path: &Path) {
+fn bench_gemm_n_n(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_path: &Path) {
     let mut metrics: Vec<BenchMetrics> = Vec::with_capacity(6);
     let mut collector = MetricSet::with_capacity(size_sample.len());
 
@@ -925,7 +927,135 @@ fn bench_gemm_f_f(noise: &mut Noise, size_sample: &[usize], target_time: f64, pl
     }
     collector.finalize(&mut metrics);
 
-    match plot_bench(&metrics, &plot_path.join("gemm_f_f.png")) {
+    match plot_bench(&metrics, &plot_path.join("gemm_n_n.png")) {
+        Ok(_) => println!(),
+        Err(err) => {
+            eprintln!("failed to render benchmark plot: {err}");
+        }
+    }
+}
+
+fn bench_gemm_t_n(noise: &mut Noise, size_sample: &[usize], target_time: f64, plot_path: &Path) {
+    let mut metrics: Vec<BenchMetrics> = Vec::with_capacity(6);
+    let mut collector = MetricSet::with_capacity(size_sample.len());
+
+    println!("| Size | Run | GFLOPS | %GFLOPS | %Latency | WSS Cache | Cyc/Flop |");
+    println!("|------|-----|--------|---------|----------|-----------|----------|");
+
+    for &i in size_sample {
+        let mut a_buf = vec![0.0f32; i * i];
+        let mut x_buf = vec![0.0f32; i * i];
+        let mut y1_buf = vec![0.0f32; i * i];
+        let mut y2_buf = vec![0.0f32; i * i];
+
+        black_box(&mut a_buf);
+        black_box(&mut x_buf);
+        black_box(&mut y1_buf);
+        black_box(&mut y2_buf);
+
+        noise.fill_f32(&mut a_buf);
+        noise.fill_f32(&mut x_buf);
+
+        y1_buf.fill(1.0);
+        let (rc, toc, tsc) = run_bench(
+            || {
+                gemm(
+                    i, // m
+                    i, // n
+                    i, // k
+                    5.0,
+                    &a_buf, // matrix A
+                    i,      // lda
+                    &x_buf, // matrix B
+                    i,      // ldb
+                    7.0,
+                    &mut y1_buf, // result C
+                    i,           // ldc
+                    true,
+                    false,
+                );
+            },
+            target_time,
+        );
+
+        y2_buf.fill(1.0);
+        let (rc_intel, toc_intel, tsc_intel) = run_bench(
+            || {
+                gemm_intel_mkl(
+                    i as i32, // m
+                    i as i32, // n
+                    i as i32, // k
+                    5.0,
+                    &a_buf,   // matrix A
+                    i as i32, // lda
+                    &x_buf,   // matrix B
+                    i as i32, // ldb
+                    7.0,
+                    &mut y2_buf, // result C
+                    i as i32,    // ldc
+                    true,
+                    false,
+                );
+            },
+            target_time,
+        );
+
+        let working_kbyte =
+            (2.0 * i.pow(2) as f64 + 3.0 * i.pow(2) as f64) * size_of::<f32>() as f64 / 1024.0;
+        let total_flops = 2.0 * i.pow(3) as f64 * rc;
+        let total_flops_intel = 2.0 * i.pow(3) as f64 * rc_intel;
+
+        let (
+            gflops,
+            gflops_intel,
+            latency,
+            latency_intel,
+            cache_eff,
+            cyc_per_flop,
+            _cyc_per_flop_intel,
+        ) = MetricSet::derive(
+            rc,
+            rc_intel,
+            toc,
+            toc_intel,
+            tsc,
+            tsc_intel,
+            total_flops,
+            total_flops_intel,
+            working_kbyte,
+        );
+
+        let gflops_rel = (gflops - gflops_intel) / gflops_intel * 100.0;
+        let latency_rel = (latency - latency_intel) / latency_intel * 100.0;
+
+        collector.collect(
+            ((i as f64).log10(), gflops),
+            ((i as f64).log10(), latency.log10()),
+            ((i as f64).log10(), cache_eff),
+            ((i as f64).log10(), cyc_per_flop),
+            ((i as f64).log10(), gflops_rel),
+            ((i as f64).log10(), latency_rel),
+        );
+
+        println!(
+            "| {:>.0} | {:>.0} | {:>.4} | {} | {} | {:>.2}% | {:>.4} |",
+            i,
+            rc,
+            gflops,
+            fmt_rel(gflops_rel, false),
+            fmt_rel(latency_rel, true),
+            cache_eff,
+            cyc_per_flop
+        );
+
+        noise.fill_f32(&mut a_buf);
+        noise.fill_f32(&mut x_buf);
+        y1_buf.fill(1.0);
+        y2_buf.fill(1.0);
+    }
+    collector.finalize(&mut metrics);
+
+    match plot_bench(&metrics, &plot_path.join("gemm_t_n.png")) {
         Ok(_) => println!(),
         Err(err) => {
             eprintln!("failed to render benchmark plot: {err}");

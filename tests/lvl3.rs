@@ -190,13 +190,14 @@ fn gemm_panic() {
 #[test]
 fn gemm_zero_dims() {
     let mut c = vec![1.0f32; 4];
-    let orig = c.clone();
-    gemm(0, 2, 2, 1.0, &[], 0, &[], 0, 2.0, &mut c, 2, false, false);
-    assert_eq!(c, orig);
 
-    gemm(2, 0, 2, 1.0, &[], 0, &[], 0, 2.0, &mut c, 2, false, false);
-    assert_eq!(c, orig);
+    // m == 0 or n == 0: nothing to do, C untouched
+    gemm(0, 2, 2, 1.0, &[], 1, &[], 2, 2.0, &mut c, 2, false, false);
+    assert_eq!(c, vec![1.0; 4]);
+    gemm(2, 0, 2, 1.0, &[], 2, &[], 2, 2.0, &mut c, 2, false, false);
+    assert_eq!(c, vec![1.0; 4]);
 
-    gemm(2, 2, 0, 1.0, &[], 0, &[], 0, 2.0, &mut c, 2, false, false);
-    assert_eq!(c, orig);
+    // k == 0: empty product, but BLAS still does C = beta * C
+    gemm(2, 2, 0, 1.0, &[], 2, &[], 1, 2.0, &mut c, 2, false, false);
+    assert_eq!(c, vec![2.0; 4]);
 }

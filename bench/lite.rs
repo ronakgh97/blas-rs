@@ -7,6 +7,7 @@ use std::arch::x86_64::{__rdtscp, _mm_lfence, _rdtsc};
 use std::f64::consts::PI;
 use std::hint::black_box;
 use std::time::Instant;
+
 // Clean & less noise harness, preferable to be used with Intel Vtune/Advisor.
 // It runs a kernel for a given size and duration, and prints the number of runs, elapsed time, GFLOPS and cycle cost.
 
@@ -76,8 +77,8 @@ fn main() {
     let flops_per_call: f64 = match kernel {
         "axpy" | "dot" | "nrm2" => 2.0 * size as f64,
         "asum" | "scal" | "i_amax" => size as f64,
-        "gemv" | "gemv_t" => 2.0 * size as f64 * size as f64,
-        "gemm_f_f" | "gemm_t_f" | "gemm_f_t" | "gemm_t_t" => {
+        "gemv_n" | "gemv_t" => 2.0 * size as f64 * size as f64,
+        "gemm_n_n" | "gemm_t_n" | "gemm_n_t" | "gemm_t_t" => {
             2.0 * size as f64 * size as f64 * size as f64
         }
         _ => {
@@ -114,7 +115,7 @@ fn main() {
             "asum" => {
                 black_box(asum(size, &x, 1));
             }
-            "gemv" => {
+            "gemv_n" => {
                 let _: () = {
                     gemv(size, size, 2.0, &a, size, &x, 1, 3.0, &mut y, 1, false);
                     black_box(())
@@ -126,7 +127,7 @@ fn main() {
                     black_box(())
                 };
             }
-            "gemm_f_f" => {
+            "gemm_n_n" => {
                 let _: () = {
                     gemm(
                         size, size, size, 2.0, &a, size, &b, size, 3.0, &mut c, size, false, false,
@@ -134,7 +135,7 @@ fn main() {
                     black_box(())
                 };
             }
-            "gemm_t_f" => {
+            "gemm_t_n" => {
                 let _: () = {
                     gemm(
                         size, size, size, 2.0, &a, size, &b, size, 3.0, &mut c, size, true, false,
@@ -142,7 +143,7 @@ fn main() {
                     black_box(())
                 };
             }
-            "gemm_f_t" => {
+            "gemm_n_t" => {
                 let _: () = {
                     gemm(
                         size, size, size, 2.0, &a, size, &b, size, 3.0, &mut c, size, false, true,
@@ -205,7 +206,7 @@ fn main() {
             "asum" => {
                 black_box(asum(size, &x, 1));
             }
-            "gemv" => {
+            "gemv_n" => {
                 let _: () = {
                     gemv(size, size, 2.0, &a, size, &x, 1, 3.0, &mut y, 1, false);
                     black_box(())
@@ -217,7 +218,7 @@ fn main() {
                     black_box(())
                 };
             }
-            "gemm_f_f" => {
+            "gemm_n_n" => {
                 let _: () = {
                     gemm(
                         size, size, size, 2.0, &a, size, &b, size, 3.0, &mut c, size, false, false,
@@ -225,7 +226,7 @@ fn main() {
                     black_box(())
                 };
             }
-            "gemm_t_f" => {
+            "gemm_t_n" => {
                 let _: () = {
                     gemm(
                         size, size, size, 2.0, &a, size, &b, size, 3.0, &mut c, size, true, false,
@@ -233,7 +234,7 @@ fn main() {
                     black_box(())
                 };
             }
-            "gemm_f_t" => {
+            "gemm_n_t" => {
                 let _: () = {
                     gemm(
                         size, size, size, 2.0, &a, size, &b, size, 3.0, &mut c, size, false, true,
@@ -264,7 +265,7 @@ fn main() {
 
     let total_flops = flops_per_call * runs as f64;
     let gflops = total_flops / elapsed / 1e9;
-    let archmetic_intensity = total_flops / (size * size) as f64;
+    let arithmetic_intensity = total_flops / (size * size) as f64;
     let cycles = (clock_end_mark - clock_start_mark) as f64;
 
     println!("---");
@@ -273,7 +274,7 @@ fn main() {
     println!("runs:     {}", runs);
     println!("elapsed:  {:.3}s", elapsed);
     println!("gflops:   {:.3}", gflops);
-    println!("ai:       {:.3}", archmetic_intensity);
+    println!("ai:       {:.3}", arithmetic_intensity);
     println!("flops/c:  {:.3}", flops_per_call);
     println!("cycles/f: {:.3}", cycles / total_flops);
 }
