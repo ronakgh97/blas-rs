@@ -7,8 +7,8 @@ use std::arch::x86_64::{
     _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps,
 };
 
+#[inline]
 #[allow(clippy::too_many_arguments)]
-#[inline(always)]
 /// The gemv routines compute a scalar-matrix-vector product and add the result to a scalar-vector product, with a general matrix.
 /// [ref](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-dpcpp/2025-2/gemv.html)
 pub fn gemv(
@@ -641,14 +641,14 @@ pub fn gemv(
 }
 
 #[test]
-fn gemv_test() {
+fn gemv_regress() {
     use crate::utils::Noise;
     use std::hint::black_box;
     use std::time::Instant;
 
     let warmup_count = 64;
     let run_count = 256;
-    let size = 1256;
+    let size = 1024;
 
     println!("size: {}", size);
 
@@ -684,11 +684,7 @@ fn gemv_test() {
     let total_flops = 2.0 * (size.pow(2) as f64) * (run_count as f64);
     let gflops = total_flops / dur.as_secs_f64() / 1e9;
 
-    println!(
-        "gemv: {:?} seconds, {:.2} GFLOPS",
-        dur.as_secs_f64(),
-        gflops
-    );
+    assert!(gflops > 60.0, "gemv_n perf regress: {:.2} GFLOPS", gflops);
 
     noise.fill_f32(&mut a);
     noise.fill_f32(&mut x);
@@ -710,11 +706,7 @@ fn gemv_test() {
     let total_flops = 2.0 * (size.pow(2) as f64) * (run_count as f64);
     let gflops = total_flops / dur.as_secs_f64() / 1e9;
 
-    println!(
-        "gemv_t: {:?} seconds, {:.2} GFLOPS",
-        dur.as_secs_f64(),
-        gflops
-    );
+    assert!(gflops > 60.0, "gemv_t perf regress: {:.2} GFLOPS", gflops);
 }
 
 // #[allow(clippy::too_many_arguments)]

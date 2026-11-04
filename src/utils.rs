@@ -448,10 +448,8 @@ fn test_simd_reduce() {
         let nvt_cycle_per_ops = ntv_cycle_c / (RUN as u64);
         let opt_cycle_per_ops = opt_cycle_c / (RUN as u64);
 
-        println!(
-            "Native: cycles/ops: {}, elapsed: {:?}\nOpt: cycles/ops: {}, elapsed: {:?}",
-            nvt_cycle_per_ops, ntv_elapsed, opt_cycle_per_ops, opt_elapsed
-        );
+        assert!(opt_cycle_per_ops < nvt_cycle_per_ops);
+        assert!(opt_elapsed < ntv_elapsed);
     }
 }
 
