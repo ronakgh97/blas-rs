@@ -3,7 +3,6 @@ use crate::shared::utils::MAX_L1L2_KB;
 use std::arch::x86_64::{__rdtscp, _mm_lfence, _rdtsc};
 use std::time::Instant;
 
-#[inline(always)]
 /// Bench a function `f()` by running it repeatedly until `target_time` seconds have elapsed,
 /// and returning `(runs, elapsed_secs, tsc_cycles)`.
 pub fn run_bench<F>(mut f: F, target_time: f64) -> (f64, f64, f64)
@@ -82,7 +81,6 @@ impl MetricSet {
         self.compare_latency.push(compare_latency);
     }
 
-    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub fn derive(
         runs: f64,

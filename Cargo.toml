@@ -1,6 +1,6 @@
 [package]
 name = "blas-rs"
-version = "1.1.0-alpha.1"
+version = "1.1.0-alpha.2"
 edition = "2024"
 authors = ["ronakgh {ronakgh97@gmail.com}"]
 description = "Experimental F32 BLAS & Intel Math kernels library for x86_64 cpus"
@@ -38,9 +38,10 @@ debug = true
 
 [dependencies]
 rand = "0.10.3"
-# rand_xoshiro = "0.8.1" # apparently my impl of xoshiro is better suited :)
 # rayon = "1.12.0" # for cpu parallel computations
-# wgpu = "30.0.1"
+# wgpu = "30.0.1" # cross-platform gpu computations
+# pollster = "1.0.1"
+# rand_xoshiro = "0.8.1" # apparently my impl of xoshiro is better suited :)
 
 [dev-dependencies]
 blas = "0.23.0" # for BLAS bindings, used in the reference implementation and benchmarks

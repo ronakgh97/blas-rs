@@ -45,10 +45,9 @@ fn main() {
     unsafe {
         std::env::set_var("MKL_NUM_THREADS", "1");
     }
-
-    // bit yap about axpy and dot, axpy is slightly overhead, due to ` _mm256_storeu_ps`, write heavy,
-    // so its write-bandwidth bound, even it whole vectors fits in cache and also "cache" does not help much since those 8 lanes are not reused.
-    // while dot is just most read heavy, and accumulated in 4 sum register, less overhead, finally the `cache miss` is heuristic metrics as said earlier
+    unsafe {
+        std::env::set_var("BLAS_RS_NUM_THREADS", "1");
+    }
 
     let cli = CLi::parse();
     // bench will take minimum time of `target time * sample_len * kernel_len`

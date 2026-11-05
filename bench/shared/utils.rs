@@ -1,12 +1,12 @@
 use blas::{isamax, sasum, saxpy, sdot, sgemm, sgemv, snrm2};
-use blas_rs::utils::get_cache_size;
+use blas_rs::utils::cpu_cache_size;
 use std::sync::LazyLock;
 
 extern crate intel_mkl_src;
 
 /// [Intel CPU](https://www.intel.com/content/www/us/en/products/sku/235996/intel-core-i7-processor-14650hx-30m-cache-up-to-5-20-ghz/specifications.html)
 pub static MAX_L1L2_KB: LazyLock<f64> = LazyLock::new(|| {
-    let (l1, l2, _) = get_cache_size();
+    let (l1, l2, _) = cpu_cache_size();
     (l1 + l2) as f64 // <- this assumption is a bit wrong but fine
 });
 #[inline(always)]

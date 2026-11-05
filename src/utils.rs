@@ -62,8 +62,8 @@ impl Noise {
         let seed1 = seed.wrapping_mul(0x9e3779b97f4a7c15) as i64;
         let seed2 = seed.wrapping_mul(0xbf58476d1ce4e5b9) as i64;
         let seed3 = seed.wrapping_mul(0x94d049bb133111eb) as i64;
+        // very cool shit
         Self {
-            // cool shit
             s0: unsafe { _mm256_set_epi64x(seed3, seed2, seed1, seed0) },
             s1: unsafe { _mm256_set_epi64x(seed3 ^ seed2, seed3, seed2, seed1) },
             s2: unsafe { _mm256_set_epi64x(seed3 ^ seed2, seed3 ^ seed2, seed3, seed2) },
@@ -233,7 +233,7 @@ impl Noise {
 
     /// Fills a buffer with random bytes
     #[inline(always)]
-    pub fn fill_bytes(&mut self, buf: &mut [u8]) {
+    pub fn fill_u8(&mut self, buf: &mut [u8]) {
         // fill the buffer in chunks of 128 bytes (4 * 32 bytes)
         let (chunks_128, reminder_128) = buf.as_chunks_mut::<128>();
         for chunk in chunks_128 {
@@ -259,40 +259,58 @@ impl Noise {
             }
         }
 
-        // fill any remaining bytes (less than 32) using exactly one u64
+        // fill any remaining bytes (less than 32) using as many u64s as needed
         let rem = reminder_chunk_32;
         if !rem.is_empty() {
-            let (r, _, _, _) = self.next_u64s();
-            let bytes: [u8; 8] = r.to_ne_bytes();
-            rem.copy_from_slice(&bytes[..rem.len()]);
+            let mut offset = 0;
+            while offset < rem.len() {
+                let (r, _, _, _) = self.next_u64s();
+                let bytes: [u8; 8] = r.to_ne_bytes();
+                let to_copy = (rem.len() - offset).min(8);
+                rem[offset..offset + to_copy].copy_from_slice(&bytes[..to_copy]);
+                offset += to_copy;
+            }
         }
     }
 }
 
 #[test]
-fn test_f32_fill() {
-    use core::arch::x86_64::*;
+fn test_rand_fill() {
     let mut noise = Noise::rng();
-    let mut buf = vec![0.0f32; 999_999_999];
+    let mut buf = vec![0.0f32; 9_999_999];
     let strt = std::time::Instant::now();
-    let clock_start_mark = unsafe {
-        _mm_lfence();
-        _rdtsc()
-    };
     noise.fill_f32(&mut buf);
     let elp = strt.elapsed();
-    let clock_end_mark = unsafe {
-        let e = __rdtscp(&mut 0);
-        _mm_lfence();
-        e
-    };
-    println!(
-        "Generated {} random numbers in {:?} seconds, cycle cost/number: {}",
-        buf.len(),
-        elp.as_secs_f32(),
-        (clock_end_mark - clock_start_mark) / buf.len() as u64
+    assert!(
+        elp.as_secs_f64() < 0.88,
+        "fill_f32 took too long: {:?}",
+        elp
     );
     assert!(buf.iter().all(|&x| (-1.0..=1.0).contains(&x)));
+
+    let mut buf = vec![0u8; 9_999_999];
+    let strt = std::time::Instant::now();
+    noise.fill_u8(&mut buf);
+    let elp = strt.elapsed();
+    assert!(
+        elp.as_secs_f64() < 0.88,
+        "fill_bytes took too long: {:?}",
+        elp
+    );
+    assert!(buf.iter().all(|&x| (0..=255).contains(&x)));
+}
+
+#[test]
+fn test_rand_bool() {
+    let count = 9_999_999;
+    let bools = {
+        let mut noise = Noise::rng();
+        (0..count).map(|_| noise.bool(0.5)).collect::<Vec<bool>>()
+    };
+    let trues = bools.iter().filter(|&&b| b).count();
+    let ratio = trues as f64 / count as f64;
+    let error = (ratio - 0.5).abs();
+    assert!(error < 0.01, "bool() error too high: {}", error);
 }
 
 /// Performs horizontal add reduction of `__m256` vector and returns as a `f32`
@@ -371,85 +389,43 @@ macro_rules! reduce_max {
 
 #[test]
 fn test_simd_reduce() {
-    use core::arch::x86_64::*;
-    use std::hint::black_box;
     use std::time::Instant;
 
-    const LANE: usize = 8;
-    const RUN: usize = 512 * 512; // ~2MB
-
     let mut noise = Noise::rng();
+    let mut sample = vec![0.0f32; 9_999_999];
+    noise.fill_f32(&mut sample);
 
-    let sample = {
-        let mut vec = vec![0.0f32; LANE * RUN]; // heap is fine here
-        noise.fill_f32(&mut vec);
-        vec
-    };
+    // test compare against rust naive iters
 
-    unsafe {
-        // native way
-        let (ntv_cycle_c, ntv_elapsed) = {
-            let time = Instant::now();
-            // start
-            let clock_start_mark = {
-                _mm_lfence();
-                _rdtsc()
-            };
+    let start = Instant::now();
+    let sum = sample.iter().sum::<f32>();
+    let naive_elapsed = start.elapsed();
 
-            for i in 0..RUN {
-                // for simplicity and avoiding obvious `stack-spill`
-                // we use rust idiomatic iterator
-                let max = sample[i * LANE..(i + 1) * LANE]
-                    .iter()
-                    .copied()
-                    .reduce(f32::max)
-                    .unwrap_unchecked(); // iter is not empty
+    let start = Instant::now();
+    let mut scalar = 0.0;
+    let (chunks_8, reminder_8) = sample.as_chunks::<8>();
+    for chunk in chunks_8 {
+        unsafe {
+            let v = _mm256_loadu_ps(chunk.as_ptr());
+            scalar += reduce_add!(v);
+        }
+    }
+    for x in reminder_8 {
+        scalar += x;
+    }
+    let simd_elapsed = start.elapsed();
 
-                black_box(max);
-            }
-
-            // end
-            let clock_end_mark = {
-                let e = __rdtscp(&mut 0);
-                _mm_lfence();
-                e
-            };
-            let elapsed = time.elapsed();
-
-            (clock_end_mark - clock_start_mark, elapsed)
-        };
-
-        // opt way
-        let (opt_cycle_c, opt_elapsed) = {
-            let time = Instant::now();
-            // start
-            let clock_start_mark = {
-                _mm_lfence();
-                _rdtsc()
-            };
-
-            for i in 0..RUN {
-                let load_reg = _mm256_loadu_ps(sample.as_ptr().add(i * LANE));
-                let max = reduce_max!(load_reg); // in-reg
-                black_box(max);
-            }
-
-            // end
-            let clock_end_mark = {
-                let e = __rdtscp(&mut 0);
-                _mm_lfence();
-                e
-            };
-            let elapsed = time.elapsed();
-
-            (clock_end_mark - clock_start_mark, elapsed)
-        };
-
-        let nvt_cycle_per_ops = ntv_cycle_c / (RUN as u64);
-        let opt_cycle_per_ops = opt_cycle_c / (RUN as u64);
-
-        assert!(opt_cycle_per_ops < nvt_cycle_per_ops);
-        assert!(opt_elapsed < ntv_elapsed);
+    assert!(
+        (scalar - sum).abs() < 1.0,
+        "SIMD sum does not match naive sum: {} vs {}",
+        scalar,
+        sum
+    );
+    if cfg!(not(debug_assertions)) {
+        assert!(
+            simd_elapsed < naive_elapsed,
+            "SIMD sum is not faster than naive sum"
+        );
     }
 }
 
@@ -572,7 +548,7 @@ fn test_mat_transpose() {
 
 #[inline]
 /// Returns the cache sizes (L1, L2, L3) in KB for the current `X86` CPU using CPUID
-pub fn get_cache_size() -> (usize, usize, usize) {
+pub fn cpu_cache_size() -> (usize, usize, usize) {
     let mut l1 = 0;
     let mut l2 = 0;
     let mut l3 = 0;
