@@ -1,6 +1,5 @@
 **BLAS Kernels** and **Intel Math Library** Kernels in modern native RUST 🦀. `ONLY x86_64`
 
-[Bench ref](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark)
 To bench, run **[main harness](bench/main.rs)** using
 `cargo bench --bench main -- --kernels <kernel1> <kernel2> ...` (e.g.
 `--kernels axpy dot`) or the **[lite harness](bench/lite.rs)** using
@@ -8,7 +7,7 @@ To bench, run **[main harness](bench/main.rs)** using
 `axpy 2048 12`).
 Build using `RUSTFLAGS target-cpu=x86-64-v3` (already set in `.cargo/config.toml`), otherwise rustc will throw error.
 Use `Intel Vtune/Advisor` with lite harness for better profiling and insights, since lite harness has less noise
-and overhead.
+and overhead. [Bench reference here](https://github.com/OpenMathLib/OpenBLAS/tree/develop/benchmark)
 
 Install [Intel oneAPI Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/oneapi-toolkit-download.html?packages=oneapi-toolkit&oneapi-toolkit-os=linux&oneapi-lin=offline)
 then copy the `.dll` or `.so` into the project root:
@@ -122,28 +121,28 @@ then copy the `.dll` or `.so` into the project root:
 
 | Size  | Run   | GFLOPS   | %GFLOPS   | %Latency  | WSS Cache | Cyc/Flop |
 |-------|-------|----------|-----------|-----------|-----------|----------|
-| 128   | 74479 | 99.4360  | -18.1762% | +22.2139% | 100.00%   | 0.0243   |
-| 256   | 9943  | 106.1976 | -18.5872% | +22.8308% | 100.00%   | 0.0228   |
-| 512   | 1300  | 111.0128 | -15.5397% | +18.3988% | 40.94%    | 0.0218   |
-| 1024  | 144   | 98.1715  | -21.5195% | +27.4202% | 10.23%    | 0.0246   |
-| 2048  | 19    | 99.5752  | -24.2721% | +32.0517% | 2.56%     | 0.0243   |
-| 4096  | 3     | 88.7921  | -34.9032% | +53.6173% | 0.64%     | 0.0272   |
-| 8192  | 1     | 92.4538  | -31.6829% | +46.3763% | 0.16%     | 0.0262   |
-| 16384 | 1     | 91.0396  | -32.1026% | +47.2810% | 0.04%     | 0.0266   |
+| 128   | 76403 | 102.0044 | -15.7922% | +18.7538% | 100.00%   | 0.0237   |
+| 256   | 11259 | 120.2529 | -7.8760%  | +8.5493%  | 100.00%   | 0.0201   |
+| 512   | 1509  | 128.8788 | -3.3256%  | +3.4400%  | 40.94%    | 0.0188   |
+| 1024  | 190   | 129.7340 | -2.2642%  | +2.3167%  | 10.23%    | 0.0186   |
+| 2048  | 24    | 130.9402 | -3.2452%  | +3.3541%  | 2.56%     | 0.0185   |
+| 4096  | 3     | 124.6450 | -5.9404%  | +6.3156%  | 0.64%     | 0.0194   |
+| 8192  | 1     | 126.5386 | -5.3712%  | +5.6761%  | 0.16%     | 0.0191   |
+| 16384 | 1     | 126.6204 | -5.2941%  | +5.5900%  | 0.04%     | 0.0191   |
 
 **GEMM_T_N**
 ![plot](bench/plots/gemm_t_n.png)
 
 | Size  | Run   | GFLOPS   | %GFLOPS   | %Latency  | WSS Cache | Cyc/Flop |
 |-------|-------|----------|-----------|-----------|-----------|----------|
-| 128   | 69394 | 92.6465  | -19.3953% | +24.0623% | 100.00%   | 0.0261   |
-| 256   | 9397  | 100.3615 | -19.5460% | +24.2946% | 100.00%   | 0.0241   |
-| 512   | 1200  | 102.5330 | -20.5300% | +25.8336% | 40.94%    | 0.0236   |
-| 1024  | 151   | 102.6821 | -21.1463% | +26.8171% | 10.23%    | 0.0236   |
-| 2048  | 18    | 96.9551  | -25.0647% | +33.4484% | 2.56%     | 0.0250   |
-| 4096  | 3     | 92.0507  | -29.3546% | +41.5520% | 0.64%     | 0.0263   |
-| 8192  | 1     | 91.1783  | -29.4387% | +41.7207% | 0.16%     | 0.0265   |
-| 16384 | 1     | 94.0534  | -27.2915% | +37.5354% | 0.04%     | 0.0257   |
+| 128   | 73812 | 98.5444  | -11.9607% | +13.5857% | 100.00%   | 0.0245   |
+| 256   | 10920 | 116.6294 | -8.2917%  | +9.0413%  | 100.00%   | 0.0207   |
+| 512   | 1499  | 128.0555 | -3.7126%  | +3.8558%  | 40.94%    | 0.0189   |
+| 1024  | 192   | 130.6030 | -3.4984%  | +3.6252%  | 10.23%    | 0.0185   |
+| 2048  | 24    | 130.7744 | -3.4328%  | +3.5548%  | 2.56%     | 0.0185   |
+| 4096  | 3     | 130.1127 | -3.4181%  | +3.5390%  | 0.64%     | 0.0186   |
+| 8192  | 1     | 124.9933 | -4.5209%  | +4.7350%  | 0.16%     | 0.0194   |
+| 16384 | 1     | 125.5541 | -6.0076%  | +6.3916%  | 0.04%     | 0.0193   |
 
 Want to improve the bench perf or fix nasty numeric edge cases? Send some PRs.
 
