@@ -9,6 +9,7 @@ use std::arch::x86_64::{
     _mm256_set1_ps, _mm256_shuffle_ps, _mm256_slli_epi64, _mm256_srli_epi64, _mm256_storeu_ps,
     _mm256_storeu_si256, _mm256_unpackhi_ps, _mm256_unpacklo_ps, _mm256_xor_si256,
 };
+use std::sync::LazyLock;
 
 /// A simple random noise generator, implements [`xorshiro256PlusPlus`](https://prng.di.unimi.it/xoshiro256plusplus.c) algorithm with AVX2 support.
 #[derive(Clone)]
@@ -390,7 +391,7 @@ macro_rules! reduce_max {
 }
 
 #[test]
-fn test_simd_reduce() {
+fn test_simd_reduce_add() {
     use std::time::Instant;
 
     let mut noise = Noise::rng();
@@ -587,11 +588,28 @@ fn test_mat_transpose() {
             }
         }
     }
+
+    // perf regression test for large matrices
+    let rows = 8192;
+    let cols = 8192;
+
+    let mut src = vec![0.0f32; rows * cols];
+    noise.fill_f32(&mut src);
+    let mut dest = vec![0.0f32; rows * cols];
+
+    let start = std::time::Instant::now();
+    mat_transpose(&src, &mut dest, rows, cols);
+    let elapsed = start.elapsed();
+
+    let mbps = (rows * cols * size_of::<f32>()) as f64 / elapsed.as_secs_f64() / (1024.0 * 1024.0);
+
+    if cfg!(not(debug_assertions)) {
+        assert!(mbps > 888.0, "mat_transpose perf regression: {} MB/s", mbps);
+    };
 }
 
-#[inline]
-/// Returns the cache sizes (L1, L2, L3) in KB for the current `X86` CPU using CPUID
-pub fn cpu_cache_size() -> (usize, usize, usize) {
+/// Returns the CPU cache sizes (L1, L2, L3) in KB as a tuple
+pub static CPU_CACHE_SIZE: LazyLock<(usize, usize, usize)> = LazyLock::new(|| {
     let mut l1 = 0;
     let mut l2 = 0;
     let mut l3 = 0;
@@ -626,4 +644,4 @@ pub fn cpu_cache_size() -> (usize, usize, usize) {
     }
 
     (l1, l2, l3)
-}
+});

@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "blas-rs"
-version = "1.1.0-alpha.2"
+version = "1.1.0-alpha.3"
 dependencies = [
  "blas",
  "clap",

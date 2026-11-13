@@ -1,6 +1,6 @@
 [package]
 name = "blas-rs"
-version = "1.1.0-alpha.2"
+version = "1.1.0-alpha.3"
 edition = "2024"
 authors = ["ronakgh {ronakgh97@gmail.com}"]
 description = "Experimental F32 BLAS & Intel Math kernels library for x86_64 cpus"
