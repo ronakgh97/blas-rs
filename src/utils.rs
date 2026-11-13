@@ -443,6 +443,8 @@ pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
     const LANE: usize = 8;
     const TILE: usize = 64;
 
+    // TODO: would transpose in parallel be faster?
+
     for ii in (0..rows).step_by(TILE) {
         for jj in (0..cols).step_by(TILE) {
             let i_max = (ii + TILE).min(rows);
