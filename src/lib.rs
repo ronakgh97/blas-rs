@@ -90,11 +90,6 @@ pub fn init_thread_pool() {
     let _ = &*GLOBAL_THREAD_POOL;
 }
 
-/// Get a reference to the global thread pool, which is initialized on first use
-pub fn get_thread_pool() -> &'static rayon::ThreadPool {
-    &*GLOBAL_THREAD_POOL
-}
-
 pub mod gpu;
 pub mod lvl1;
 pub mod lvl2;

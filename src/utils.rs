@@ -1,5 +1,7 @@
 //! Utility functions for random noise generation and matrix helper operations
 
+use crate::GLOBAL_THREAD_POOL;
+use rayon::prelude::*;
 use std::arch::x86_64::{
     __cpuid_count, __m256i, _mm_cvtsi128_si64, _mm_unpackhi_epi64, _mm_xor_si128, _mm256_add_epi64,
     _mm256_castsi256_si128, _mm256_cvtepi32_ps, _mm256_extract_epi64, _mm256_extracti128_si256,
@@ -430,8 +432,8 @@ fn test_simd_reduce() {
     }
 }
 
+#[inline]
 /// Transposes a matrix `src` of dimensions `rows x cols` into `dest` of dimensions `cols x rows` using a blocked approach for cache efficiency
-#[inline(always)]
 pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
     assert_eq!(src.len(), rows * cols);
     assert_eq!(dst.len(), rows * cols);
@@ -440,14 +442,41 @@ pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
         return;
     }
 
+    // too small, scheduling overhead would dominate
+    if GLOBAL_THREAD_POOL.current_num_threads() == 1 || rows * cols < (16 << 12) {
+        transpose_range(src, dst, rows, cols, 0, rows);
+        return;
+    }
+
+    // split `rows` into bands of 64 rows (the tile granularity), one band per worker
+    let nt = GLOBAL_THREAD_POOL.current_num_threads();
+    let band = rows.div_ceil(nt).div_ceil(64) * 64;
+
+    GLOBAL_THREAD_POOL.install(|| {
+        dst.par_chunks_mut(band * cols)
+            .take(nt)
+            .enumerate()
+            .for_each(|(b, d)| {
+                let r0 = b * band;
+                if r0 >= rows {
+                    return;
+                }
+                let r1 = (r0 + band).min(rows);
+                transpose_range(src, d, rows, cols, r0, r1);
+            });
+    });
+}
+
+#[inline(always)]
+/// Transposes row band `r0..r1` of `src` (`rows x cols`) into `dst` (`cols x rows`)
+/// using a blocked approach for cache efficiency
+fn transpose_range(src: &[f32], dst: &mut [f32], rows: usize, cols: usize, r0: usize, r1: usize) {
     const LANE: usize = 8;
     const TILE: usize = 64;
 
-    // TODO: would transpose in parallel be faster?
-
-    for ii in (0..rows).step_by(TILE) {
+    for ii in (r0..r1).step_by(TILE) {
         for jj in (0..cols).step_by(TILE) {
-            let i_max = (ii + TILE).min(rows);
+            let i_max = (ii + TILE).min(r1);
             let j_max = (jj + TILE).min(cols);
 
             unsafe {
@@ -459,13 +488,13 @@ pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
                         if i_end - i == LANE && j_end - j == LANE {
                             // 8x8 micro transpose
                             let src = src.as_ptr().add(i * cols + j);
-                            let dst = dst.as_mut_ptr().add(j * rows + i);
+                            let dst = dst.as_mut_ptr().add(j * rows + i - r0 * cols);
                             transpose_8x8_avx2(src, cols, dst, rows);
                         } else {
                             // remaining elements, do naive transpose
                             for x in i..i_end {
                                 for y in j..j_end {
-                                    *dst.get_unchecked_mut(y * rows + x) =
+                                    *dst.get_unchecked_mut(y * rows + x - r0 * cols) =
                                         *src.get_unchecked(x * cols + y);
                                 }
                             }
@@ -535,20 +564,27 @@ unsafe fn transpose_8x8_avx2(src: *const f32, src_stride: usize, dst: *mut f32, 
 
 #[test]
 fn test_mat_transpose() {
-    let rows = 1024;
-    let cols = 1536;
-    let size = rows * cols;
-
     let mut noise = Noise::rng();
-    let mut src = vec![0.0f32; size];
-    noise.fill_f32(&mut src);
-    let mut dest = vec![0.0f32; size];
 
-    mat_transpose(&src, &mut dest, rows, cols);
+    // rows/cols deliberately off the 64-tile boundary to hit the naive tail
+    // paths, and sizes above/below the parallel threshold
+    for &(rows, cols) in &[(1024, 1536), (70, 100), (2048, 4096)] {
+        let size = rows * cols;
 
-    for r in 0..rows {
-        for c in 0..cols {
-            assert_eq!(src[r * cols + c], dest[c * rows + r]);
+        let mut src = vec![0.0f32; size];
+        noise.fill_f32(&mut src);
+        let mut dest = vec![0.0f32; size];
+
+        mat_transpose(&src, &mut dest, rows, cols);
+
+        for r in 0..rows {
+            for c in 0..cols {
+                assert_eq!(
+                    src[r * cols + c].to_bits(),
+                    dest[c * rows + r].to_bits(),
+                    "rows={rows} cols={cols} src[{r},{c}] vs dst[{c},{r}]"
+                );
+            }
         }
     }
 }
