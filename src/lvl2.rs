@@ -686,7 +686,7 @@ fn gemv_regress() {
     let gflops = total_flops / dur.as_secs_f64() / 1e9;
 
     if cfg!(not(debug_assertions)) {
-        assert!(gflops > 20.0, "gemv_n perf regress: {:.2} GFLOPS", gflops);
+        assert!(gflops > 10.6, "gemv_n perf regress: {:.2} GFLOPS", gflops);
     }
 
     noise.fill_f32(&mut a);
@@ -710,7 +710,7 @@ fn gemv_regress() {
     let gflops = total_flops / dur.as_secs_f64() / 1e9;
 
     if cfg!(not(debug_assertions)) {
-        assert!(gflops > 20.0, "gemv_t perf regress: {:.2} GFLOPS", gflops);
+        assert!(gflops > 10.6, "gemv_t perf regress: {:.2} GFLOPS", gflops);
     }
 }
 

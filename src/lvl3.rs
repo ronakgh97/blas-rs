@@ -310,6 +310,85 @@ unsafe fn gemm_blocked(
         }
     }
 }
+
+use crate::GLOBAL_THREAD_POOL;
+use rayon::prelude::*;
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn gemm_par(
+    m: usize,
+    n: usize,
+    k: usize,
+    alpha: f32,
+    a: *const f32,
+    a_rs: usize,
+    a_cs: usize,
+    b: *const f32,
+    b_rs: usize,
+    b_cs: usize,
+    c: *mut f32,
+    ldc: usize,
+) {
+    let nt = GLOBAL_THREAD_POOL.current_num_threads();
+
+    // too small (2*m*n*k flops), scheduling overhead would dominate
+    if nt == 1 || 2 * m * n * k < (64 << 20) {
+        unsafe { gemm_blocked(m, n, k, alpha, a, a_rs, a_cs, b, b_rs, b_cs, c, ldc) };
+        return;
+    }
+
+    // split the larger of n / m; chunks are multiples of the micro-tile
+    let split_n = n >= m;
+    let (dim, unit) = if split_n { (n, NR) } else { (m, MR) };
+    let chunk = dim.div_ceil(nt).div_ceil(unit) * unit;
+    let nchunks = dim.div_ceil(chunk);
+
+    // cast to usize to smuggle the raw pointers into the rayon task cuz `*mut f32` is not `Send`
+    // SAFETY: A/B are read-only in every task and the C slabs are disjoint by construction of the 1D split
+    let (ap, bp, cp) = (a as usize, b as usize, c as usize);
+
+    GLOBAL_THREAD_POOL.install(|| {
+        (0..nchunks).into_par_iter().for_each(|t| unsafe {
+            let (a, b, c) = (ap as *const f32, bp as *const f32, cp as *mut f32);
+            let start = t * chunk;
+            let len = chunk.min(dim - start);
+            if split_n {
+                // columns [start, start+len) of C and op(B)
+                gemm_blocked(
+                    m,
+                    len,
+                    k,
+                    alpha,
+                    a,
+                    a_rs,
+                    a_cs,
+                    b.add(start * b_cs),
+                    b_rs,
+                    b_cs,
+                    c.add(start * ldc),
+                    ldc,
+                );
+            } else {
+                // rows [start, start+len) of C and op(A)
+                gemm_blocked(
+                    len,
+                    n,
+                    k,
+                    alpha,
+                    a.add(start * a_rs),
+                    a_rs,
+                    a_cs,
+                    b,
+                    b_rs,
+                    b_cs,
+                    c.add(start),
+                    ldc,
+                );
+            }
+        });
+    });
+}
+
 /// C += alpha * A * B
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
@@ -325,7 +404,7 @@ unsafe fn gemm_nn(
     c: *mut f32,
     ldc: usize,
 ) {
-    unsafe { gemm_blocked(m, n, k, alpha, a, 1, lda, b, 1, ldb, c, ldc) }
+    unsafe { gemm_par(m, n, k, alpha, a, 1, lda, b, 1, ldb, c, ldc) }
 }
 
 /// C += alpha * A * B^T
@@ -343,7 +422,7 @@ unsafe fn gemm_nt(
     c: *mut f32,
     ldc: usize,
 ) {
-    unsafe { gemm_blocked(m, n, k, alpha, a, 1, lda, b, ldb, 1, c, ldc) }
+    unsafe { gemm_par(m, n, k, alpha, a, 1, lda, b, ldb, 1, c, ldc) }
 }
 
 /// C += alpha * A^T * B
@@ -361,7 +440,7 @@ unsafe fn gemm_tn(
     c: *mut f32,
     ldc: usize,
 ) {
-    unsafe { gemm_blocked(m, n, k, alpha, a, lda, 1, b, 1, ldb, c, ldc) }
+    unsafe { gemm_par(m, n, k, alpha, a, lda, 1, b, 1, ldb, c, ldc) }
 }
 
 /// C += alpha * A^T * B^T
@@ -379,7 +458,7 @@ unsafe fn gemm_tt(
     c: *mut f32,
     ldc: usize,
 ) {
-    unsafe { gemm_blocked(m, n, k, alpha, a, lda, 1, b, ldb, 1, c, ldc) }
+    unsafe { gemm_par(m, n, k, alpha, a, lda, 1, b, ldb, 1, c, ldc) }
 }
 
 #[inline]
@@ -633,5 +712,87 @@ fn gemm_regress() {
             "gemm_t_n perf regress: {:.2} GFLOPS",
             gflops
         );
+    }
+}
+
+/// Parallel GEMM must be bit-identical to the serial path
+#[test]
+fn gemm_parallel_matches_serial() {
+    use crate::utils::Noise;
+
+    // 2*420*380*415 ≈ 132M flops, past the parallel threshold
+    // sizes are non-multiples of MR/NR/GEMM_KC to hit every edge-tile path
+    // with padded leading dims to hit the strided pack paths
+    let (m, n, k) = (420, 380, 415);
+    let (lda, ldb, ldc) = (m + 9, k + 7, m + 5);
+
+    let mut noise = Noise::rng();
+    let mut c_init = vec![0.0f32; ldc * n];
+    noise.fill_f32(&mut c_init);
+
+    for ta in [false, true] {
+        for tb in [false, true] {
+            let a_rows = if ta { k } else { m };
+            let a_cols = if ta { m } else { k };
+            let b_rows = if tb { n } else { k };
+            let b_cols = if tb { k } else { n };
+
+            let mut a = vec![0.0f32; (a_cols - 1) * lda + a_rows];
+            noise.fill_f32(&mut a);
+            let mut b = vec![0.0f32; (b_cols - 1) * ldb + b_rows];
+            noise.fill_f32(&mut b);
+
+            let (a_rs, a_cs) = if ta { (lda, 1) } else { (1, lda) };
+            let (b_rs, b_cs) = if tb { (ldb, 1) } else { (1, ldb) };
+
+            for beta in [0.0f32, 2.5, 1.0] {
+                // parallel path, through the public entry point
+                let mut c_par = c_init.clone();
+                gemm(
+                    m, n, k, 1.5, &a, lda, &b, ldb, beta, &mut c_par, ldc, ta, tb,
+                );
+
+                // serial reference with the same beta handling
+                let mut c_ref = c_init.clone();
+                if beta != 1.0 {
+                    for j in 0..n {
+                        if beta == 0.0 {
+                            c_ref[j * ldc..j * ldc + m].fill(0.0);
+                        } else {
+                            scal(m, beta, &mut c_ref[j * ldc..j * ldc + m], 1);
+                        }
+                    }
+                }
+                unsafe {
+                    gemm_blocked(
+                        m,
+                        n,
+                        k,
+                        1.5,
+                        a.as_ptr(),
+                        a_rs,
+                        a_cs,
+                        b.as_ptr(),
+                        b_rs,
+                        b_cs,
+                        c_ref.as_mut_ptr(),
+                        ldc,
+                    );
+                }
+
+                for j in 0..n {
+                    for i in 0..m {
+                        let idx = i + j * ldc;
+                        assert_eq!(
+                            c_par[idx].to_bits(),
+                            c_ref[idx].to_bits(),
+                            "ta={ta} tb={tb} beta={beta} c[{i},{j}]: parallel={}, serial={}",
+                            c_par[idx],
+                            c_ref[idx],
+                        );
+                    }
+                }
+            }
+        }
     }
 }

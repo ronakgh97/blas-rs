@@ -8,7 +8,7 @@ use std::f64::consts::PI;
 use std::hint::black_box;
 use std::time::Instant;
 
-// Clean & less noise harness, preferable to be used with Intel Vtune/Advisor.
+// Clean & less noise harness, preferable to be used with Intel Vtune/Advisor or Superluminal.
 // It runs a kernel for a given size and duration, and prints the number of runs, elapsed time, GFLOPS and cycle cost.
 
 fn usage() {
@@ -49,12 +49,11 @@ fn main() {
     let size: usize = cli.size;
     let target_time: f64 = cli.target_time;
 
-    // pin core
-    if let Some(cores) = core_affinity::get_core_ids() {
-        core_affinity::set_for_current(cores[4]);
-    } else {
-        eprintln!("Failed to get core ids, not pinning core");
-    };
+    // if let Some(cores) = core_affinity::get_core_ids() {
+    //     core_affinity::set_for_current(cores[4]);
+    // } else {
+    //     eprintln!("Failed to get core ids, not pinning core");
+    // };
 
     let mut noise = Noise::rng();
     let n2 = size * size;

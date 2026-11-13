@@ -404,6 +404,7 @@ fn test_simd_reduce() {
     let start = Instant::now();
     let mut scalar = 0.0;
     let (chunks_8, reminder_8) = sample.as_chunks::<8>();
+    // TODO: these often fails, but parallelize would absolutely destroy the naive version
     for chunk in chunks_8 {
         unsafe {
             let v = _mm256_loadu_ps(chunk.as_ptr());
@@ -435,6 +436,10 @@ pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
     assert_eq!(src.len(), rows * cols);
     assert_eq!(dst.len(), rows * cols);
 
+    if rows == 0 || cols == 0 {
+        return;
+    }
+
     const LANE: usize = 8;
     const TILE: usize = 64;
 
@@ -455,7 +460,7 @@ pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
                             let dst = dst.as_mut_ptr().add(j * rows + i);
                             transpose_8x8_avx2(src, cols, dst, rows);
                         } else {
-                            // remaining
+                            // remaining elements, do naive transpose
                             for x in i..i_end {
                                 for y in j..j_end {
                                     *dst.get_unchecked_mut(y * rows + x) =

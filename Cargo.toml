@@ -38,7 +38,7 @@ debug = true
 
 [dependencies]
 rand = "0.10.3"
-# rayon = "1.12.0" # for cpu parallel computations
+rayon = "1.12.0" # for cpu parallel computations
 # wgpu = "30.0.1" # cross-platform gpu computations
 # pollster = "1.0.1"
 # rand_xoshiro = "0.8.1" # apparently my impl of xoshiro is better suited :)

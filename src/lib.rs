@@ -35,8 +35,8 @@
 //!
 //! - APIs mirror BLAS-style signatures (`n`, raw increments, and slice buffers).
 //! - Most routines panic on invalid increments (`incx == 0`, `incy == 0`, `n ==0` etc.) or insufficient slice length for the requested stride.
-//! - This crate is not for a complete BLAS replacement; its purely learning focused and improve my understanding about x86, HPC, etc. So behavior and performance may change as more kernels are added.
-//!
+//! - This crate is not for a complete BLAS replacement; its purely learning focused and improve my understanding about x86, HPC, etc.
+//! - Parallelization is implemented internally for compute-bound kernels using [rayon](https://crates.io/crates/rayon).
 //!
 //! ### References
 //!
@@ -58,6 +58,35 @@ compile_error!("blas_rs is only supported on x86_64 architectures");
 compile_error!(
     "blas_rs requires some x86-64-v3 CPU capable features. Try compiling with `-C target-cpu=x86-64-v3`"
 );
+
+pub(crate) static GLOBAL_THREAD_POOL: std::sync::LazyLock<rayon::ThreadPool> =
+    std::sync::LazyLock::new(|| {
+        // read BLAS_RS_NUM_THREADS env variable to set number of threads
+
+        match std::env::var("BLAS_RS_NUM_THREADS") {
+            Ok(n) => {
+                // `=1` -> single-thread pool so kernels take the serial path
+                // `=0` or garbage -> rayon's default (all cores)
+                let n = n.trim().parse::<usize>().ok().filter(|&n| n >= 1);
+                let mut builder = rayon::ThreadPoolBuilder::new();
+                if let Some(n) = n {
+                    builder = builder.num_threads(n);
+                }
+                builder
+                    .build()
+                    .expect("failed to initialize global thread pool")
+            }
+            Err(_) => rayon::ThreadPoolBuilder::new()
+                .build()
+                .expect("failed to initialize global thread pool"),
+        }
+    });
+
+/// Initialize the global thread pool, it reads `BLAS_RS_NUM_THREADS` environment variable.
+/// Pool is automatically set when used for first time, but can be called explicitly if desired.
+pub fn init_thread_pool() {
+    let _ = &*GLOBAL_THREAD_POOL;
+}
 
 pub mod gpu;
 pub mod lvl1;

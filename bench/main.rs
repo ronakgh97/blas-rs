@@ -36,38 +36,51 @@ struct CLi {
     #[arg(short, long, num_args = 1..)]
     kernels: Vec<String>,
     #[arg(short, long, default_value_t = 32)]
-    warmup_count: usize,
+    warmup: usize,
     #[arg(short, long, default_value_t = PI)]
     target_time: f64,
 }
 
 fn main() {
-    unsafe {
-        std::env::set_var("MKL_NUM_THREADS", "1");
-    }
-    unsafe {
-        std::env::set_var("BLAS_RS_NUM_THREADS", "1");
-    }
-
     let cli = CLi::parse();
+
     // bench will take minimum time of `target time * sample_len * kernel_len`
     let target_time = cli.target_time;
     let size_sample = [128, 256, 512, 1024, 2048, 4096, 8192, 16384];
 
-    // try pinning core
-    if let Some(cores) = core_affinity::get_core_ids() {
-        core_affinity::set_for_current(cores[4]);
-    } else {
-        eprintln!("Failed to get core ids, not pinning core");
-    };
-
     println!("Heating up!!!");
     let mut noise = Noise::rng();
-    warmup(&mut noise, cli.warmup_count, 1024);
+    warmup(&mut noise, cli.warmup, 1024);
 
     let plot_path = PathBuf::from("bench/plots");
     std::fs::create_dir_all(&plot_path).ok();
     let plot_path = &plot_path;
+
+    if cli.kernels.contains(&"gemm_n_n".to_string())
+        || cli.kernels.contains(&"gemm_t_n".to_string())
+    {
+        unsafe {
+            std::env::set_var("MKL_NUM_THREADS", "8");
+        }
+        unsafe {
+            std::env::set_var("BLAS_RS_NUM_THREADS", "8");
+        }
+    } else {
+        unsafe {
+            std::env::set_var("MKL_NUM_THREADS", "1");
+        }
+        unsafe {
+            std::env::set_var("BLAS_RS_NUM_THREADS", "1");
+        }
+
+        // try pinning core for serial kernels, so that we can get more stable results
+        if let Some(cores) = core_affinity::get_core_ids() {
+            core_affinity::set_for_current(cores[4]);
+        } else {
+            eprintln!("failed to get core ids, not pinning core");
+        };
+    }
+
     for k in cli.kernels {
         match k.trim().to_lowercase().as_str() {
             "axpy" => {
