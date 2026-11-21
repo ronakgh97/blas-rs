@@ -1,0 +1,3 @@
+[[profile.default.overrides]]
+filter = "test(gemm_regress) | test(gemv_regress) | test(test_simd_reduce) | test(test_mat_transpose)"
+threads-required = 18

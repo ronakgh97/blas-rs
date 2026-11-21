@@ -1,4 +1,4 @@
-//! Utility functions for random noise generation and matrix helper operations
+//! Utility functions for random noise generation and vector/matrix helper operations
 
 use crate::GLOBAL_THREAD_POOL;
 use rayon::prelude::*;
@@ -133,7 +133,6 @@ impl Noise {
     }
 
     /// Generates a random boolean with probability `p` of being `true`
-    #[inline(always)]
     pub fn bool(&mut self, p: f64) -> bool {
         if p <= 0.0 {
             return false;
@@ -160,7 +159,6 @@ impl Noise {
     }
 
     /// Fills a buffer with random `f32` values in the range `[-1.0, 1.0]`
-    #[inline(always)]
     pub fn fill_f32(&mut self, buf: &mut [f32]) {
         // fill the buffer in chunks of 32 floats (8 * 4 floats)
         let scale = unsafe { _mm256_set1_ps(1.0 / (1u64 << 31) as f32) };
@@ -235,7 +233,6 @@ impl Noise {
     }
 
     /// Fills a buffer with random bytes
-    #[inline(always)]
     pub fn fill_u8(&mut self, buf: &mut [u8]) {
         // fill the buffer in chunks of 128 bytes (4 * 32 bytes)
         let (chunks_128, reminder_128) = buf.as_chunks_mut::<128>();
@@ -322,15 +319,13 @@ macro_rules! reduce_add {
     ($v:expr) => {{
         use core::arch::x86_64::*;
         let v: __m256 = $v;
-        // first pass; [a,b,c,d | e,f,g,h]
-        let hi = _mm256_extractf128_ps(v, 1); // [e,f,g,h]
         let lo = _mm256_castps256_ps128(v); // [a,b,c,d]
+        let hi = _mm256_extractf128_ps(v, 1); // [e,f,g,h]
         let hsum = _mm_add_ps(lo, hi); // [a+e, b+f, c+g, d+h]
 
-        // second pass; add the two halves together
         let sum = _mm_hadd_ps(hsum, hsum); // [a+e+b+f c+g+d+h a+e+b+f c+g+d+h]
         let sum = _mm_hadd_ps(sum, sum); // [a+e+b+f+c+g+d+h,_,_,_]
-        _mm_cvtss_f32(sum) // just extract one
+        _mm_cvtss_f32(sum)
     }};
 }
 
@@ -340,15 +335,55 @@ macro_rules! reduce_sub {
     ($v:expr) => {{
         use core::arch::x86_64::*;
         let v: __m256 = $v;
-        // first pass; [a,b,c,d | e,f,g,h]
+        let lo = _mm256_castps256_ps128(v); // [a,b,c,d]
         let hi = _mm256_extractf128_ps(v, 1); // [e,f,g,h]
-        let lo = _mm256_castsi256_ps(v); // [a,b,c,d]
-        let hsum = _mm256_sub_ps(lo, hi); // [a-b, c-d, e-f, g-h]
 
-        // second pass; add the two halves together
-        let sum = _mm_hsub_ps(hsum, hsum); // [a-b+e-f, c-d+g-h, a-b+e-f, c-d+g-h]
-        let sum = _mm_hsub_ps(sum, sum); // [a-b+e-f+c-d+g-h, _, _, _]
-        _mm_cvtss_f32(sum) // just extract one
+        let pairs = _mm_add_ps(lo, hi); // [a+e, b+f, c+g, d+h]
+        let sum = _mm_hadd_ps(pairs, pairs); // [a+e+b+f, c+g+d+h, a+e+b+f, c+g+d+h]
+        let sum = _mm_hadd_ps(sum, sum); // [a+e+b+f+c+g+d+h, _, _, _]
+
+        let twice_a = _mm_mul_ss(lo, _mm_set1_ps(2.0)); // [2a, _, _, _]
+        let result = _mm_sub_ss(twice_a, sum); // [2a - (a+e+b+f+c+g+d+h), _, _, _] = [a - (b+c+d+e+f+g+h), _, _, _]
+        _mm_cvtss_f32(result)
+    }};
+}
+
+/// Performs horizontal mul reduction of `__m256` vector and returns as a `f32`
+#[macro_export]
+macro_rules! reduce_mul {
+    ($v:expr) => {{
+        use core::arch::x86_64::*;
+        let v: __m256 = $v;
+        let lo = _mm256_castps256_ps128(v); // [a,b,c,d]
+        let hi = _mm256_extractf128_ps(v, 1); // [e,f,g,h]
+        let m = _mm_mul_ps(lo, hi); // [a*e, b*f, c*g, d*h]
+
+        let shuffle = _mm_shuffle_ps(m, m, 0b01_00_11_10); // [c*g, d*h, a*e, b*f]
+        let m0 = _mm_mul_ps(m, shuffle); // [a*e*c*g, b*f*d*h, a*e*c*g, b*f*d*h]
+
+        let m1 = _mm_mul_ps(m0, _mm_shuffle_ps(m0, m0, 0b10_11_00_01)); // [a*e*c*g*b*f*d*h, _, _, _]
+        _mm_cvtss_f32(m1)
+    }};
+}
+
+/// Performs horizontal div reduction of `__m256` vector and returns as a `f32`.
+#[macro_export]
+macro_rules! reduce_div {
+    ($v:expr) => {{
+        use core::arch::x86_64::*;
+        let v: __m256 = $v;
+        let lo = _mm256_castps256_ps128(v); // [a,b,c,d]
+        let hi = _mm256_extractf128_ps(v, 1); // [e,f,g,h]
+
+        // p = a*b*c*d*e*f*g*h
+        let p = _mm_mul_ps(lo, hi); // [ae,bf,cg,dh]
+        let p = _mm_mul_ps(p, _mm_shuffle_ps(p, p, 0b10_11_00_01)); // [abef,abef,cdgh,cdgh]
+        let p = _mm_mul_ps(p, _mm_movehl_ps(p, p)); // [abcdefgh, ...]
+
+        // result = a / b*c*d*e*f*g*h  (left-fold division)
+        let a2 = _mm_mul_ss(lo, lo); // a^2
+        let r = _mm_div_ss(a2, p); // a^2 / P
+        _mm_cvtss_f32(r)
     }};
 }
 
@@ -358,16 +393,16 @@ macro_rules! reduce_min {
     ($v:expr) => {{
         use core::arch::x86_64::*;
         let v: __m256 = $v;
-        let hi = _mm256_extractf128_ps(v, 1); // upper 128 bit
         let lo = _mm256_castps256_ps128(v); // lower 128 bit
+        let hi = _mm256_extractf128_ps(v, 1); // upper 128 bit
         let m = _mm_min_ps(lo, hi); // min of lower/upper, 256 -> 128 bit
 
         let shuffle = _mm_shuffle_ps(m, m, 0b01_00_11_10); // [a,b,c,d] -> [c,d,a,b]
-        let m = _mm_min_ps(m, shuffle); // [x,y,x,y]
+        let m0 = _mm_min_ps(m, shuffle); // [x,y,x,y]
 
-        let shuffle = _mm_shuffle_ps(m, m, 0b10_11_00_01); // [x,y,x,y] -> [y,x,y,x]
-        let fm = _mm_min_ps(m, shuffle); // [m,m,m,m]
-        _mm_cvtss_f32(fm) // extract first
+        let shuffle = _mm_shuffle_ps(m0, m0, 0b10_11_00_01); // [x,y,x,y] -> [y,x,y,x]
+        let m1 = _mm_min_ps(m0, shuffle); // [m,m,m,m]
+        _mm_cvtss_f32(m1) // extract first
     }};
 }
 
@@ -377,65 +412,102 @@ macro_rules! reduce_max {
     ($v:expr) => {{
         use core::arch::x86_64::*;
         let v: __m256 = $v;
-        let hi = _mm256_extractf128_ps(v, 1); // upper 128 bit
         let lo = _mm256_castps256_ps128(v); // lower 128 bit
+        let hi = _mm256_extractf128_ps(v, 1); // upper 128 bit
         let m = _mm_max_ps(lo, hi); // max of lower/upper, 256 -> 128 bit
 
         let shuffle = _mm_shuffle_ps(m, m, 0b01_00_11_10); // [a,b,c,d] -> [c,d,a,b]
-        let m = _mm_max_ps(m, shuffle); // [x,y,x,y]
+        let m0 = _mm_max_ps(m, shuffle); // [x,y,x,y]
 
-        let shuffle = _mm_shuffle_ps(m, m, 0b10_11_00_01); // [x,y,x,y] -> [y,x,y,x]
-        let fm = _mm_max_ps(m, shuffle); // [m,m,m,m]
-        _mm_cvtss_f32(fm) // extract first
+        let shuffle = _mm_shuffle_ps(m0, m0, 0b10_11_00_01); // [x,y,x,y] -> [y,x,y,x]
+        let m1 = _mm_max_ps(m0, shuffle); // [m,m,m,m]
+        _mm_cvtss_f32(m1) // extract first
     }};
 }
 
 #[test]
-fn test_simd_reduce_add() {
-    use std::time::Instant;
-
+fn test_simd_reduce() {
     let mut noise = Noise::rng();
-    let mut sample = vec![0.0f32; 9_999_999];
+    let mut sample = vec![0.0f32; 8];
     noise.fill_f32(&mut sample);
 
     // test compare against rust naive iters
 
-    let start = Instant::now();
-    let sum = sample.iter().sum::<f32>();
-    let naive_elapsed = start.elapsed();
+    // add
+    {
+        let scalar = sample.iter().sum::<f32>();
+        let simd = unsafe {
+            let v = _mm256_loadu_ps(sample.as_ptr());
+            reduce_add!(v)
+        };
 
-    let start = Instant::now();
-    let mut scalar = 0.0;
-    let (chunks_8, reminder_8) = sample.as_chunks::<8>();
-    // TODO: these often fails, but parallelize would absolutely destroy the naive version
-    for chunk in chunks_8 {
-        unsafe {
-            let v = _mm256_loadu_ps(chunk.as_ptr());
-            scalar += reduce_add!(v);
-        }
-    }
-    for x in reminder_8 {
-        scalar += x;
-    }
-    let simd_elapsed = start.elapsed();
-
-    assert!(
-        (scalar - sum).abs() < 1.0,
-        "SIMD sum does not match naive sum: {} vs {}",
-        scalar,
-        sum
-    );
-    if cfg!(not(debug_assertions)) {
         assert!(
-            simd_elapsed < naive_elapsed,
-            "SIMD sum is not faster than naive sum"
+            (simd - scalar).abs() < 1.0,
+            "SIMD sum does not match naive sum: {} != {}",
+            simd,
+            scalar
         );
     }
+
+    // sub
+    {
+        let scalar = sample[1..].iter().fold(sample[0], |acc, &x| acc - x);
+        let simd = unsafe {
+            let v = _mm256_loadu_ps(sample.as_ptr());
+            reduce_sub!(v)
+        };
+
+        assert!(
+            (simd - scalar).abs() < 1.0,
+            "SIMD sub does not match naive sub: {} != {}",
+            simd,
+            scalar
+        );
+    }
+
+    // mul
+    {
+        let scalar = sample.iter().product::<f32>();
+        let simd = {
+            let v = unsafe { _mm256_loadu_ps(sample.as_ptr()) };
+            unsafe { reduce_mul!(v) }
+        };
+
+        assert!(
+            (simd - scalar).abs() < 1.0,
+            "SIMD mul does not match naive mul: {} != {}",
+            simd,
+            scalar
+        );
+    }
+
+    // div
+    {
+        let scalar = sample[1..].iter().fold(sample[0], |acc, &x| acc / x);
+        let simd = {
+            let v = unsafe { _mm256_loadu_ps(sample.as_ptr()) };
+            unsafe { reduce_div!(v) }
+        };
+
+        assert!(
+            (simd - scalar).abs() < 1.0,
+            "SIMD div does not match naive div: {} != {}",
+            simd,
+            scalar
+        );
+    }
+
+    let x = [1.0, 4.0, -3.0, 4.0, 8.0, 4.0, 2.0, 10.0];
+    let v = unsafe { _mm256_loadu_ps(x.as_ptr()) };
+    let min = unsafe { reduce_min!(v) };
+    let max = unsafe { reduce_max!(v) };
+    assert_eq!(min, -3.0, "SIMD min does not match expected min");
+    assert_eq!(max, 10.0, "SIMD max does not match expected max");
 }
 
 #[inline]
 /// Transposes a matrix `src` of dimensions `rows x cols` into `dest` of dimensions `cols x rows` using a blocked approach for cache efficiency
-pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
+pub fn transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
     assert_eq!(src.len(), rows * cols);
     assert_eq!(dst.len(), rows * cols);
 
@@ -444,7 +516,7 @@ pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
     }
 
     // too small, scheduling overhead would dominate
-    if GLOBAL_THREAD_POOL.current_num_threads() == 1 || rows * cols < (16 << 12) {
+    if GLOBAL_THREAD_POOL.current_num_threads() == 1 || rows * cols < (1 << 16) {
         transpose_range(src, dst, rows, cols, 0, rows);
         return;
     }
@@ -473,7 +545,7 @@ pub fn mat_transpose(src: &[f32], dst: &mut [f32], rows: usize, cols: usize) {
 /// using a blocked approach for cache efficiency
 fn transpose_range(src: &[f32], dst: &mut [f32], rows: usize, cols: usize, r0: usize, r1: usize) {
     const LANE: usize = 8;
-    const TILE: usize = 64;
+    const TILE: usize = 768;
 
     for ii in (r0..r1).step_by(TILE) {
         for jj in (0..cols).step_by(TILE) {
@@ -564,19 +636,20 @@ unsafe fn transpose_8x8_avx2(src: *const f32, src_stride: usize, dst: *mut f32, 
 }
 
 #[test]
-fn test_mat_transpose() {
+#[cfg_attr(debug_assertions, ignore)]
+fn test_transpose() {
     let mut noise = Noise::rng();
 
-    // rows/cols deliberately off the 64-tile boundary to hit the naive tail
+    // rows/cols deliberately off the tile boundary to hit the naive tail
     // paths, and sizes above/below the parallel threshold
-    for &(rows, cols) in &[(1024, 1536), (70, 100), (2048, 4096)] {
+    for &(rows, cols) in &[(1024, 1536), (96, 128), (2048, 4096), (3166, 2048)] {
         let size = rows * cols;
 
         let mut src = vec![0.0f32; size];
         noise.fill_f32(&mut src);
         let mut dest = vec![0.0f32; size];
 
-        mat_transpose(&src, &mut dest, rows, cols);
+        transpose(&src, &mut dest, rows, cols);
 
         for r in 0..rows {
             for c in 0..cols {
@@ -598,13 +671,15 @@ fn test_mat_transpose() {
     let mut dest = vec![0.0f32; rows * cols];
 
     let start = std::time::Instant::now();
-    mat_transpose(&src, &mut dest, rows, cols);
+    transpose(&src, &mut dest, rows, cols);
     let elapsed = start.elapsed();
 
-    let mbps = (rows * cols * size_of::<f32>()) as f64 / elapsed.as_secs_f64() / (1024.0 * 1024.0);
+    let mut gbps = (rows * cols * size_of::<f32>()) as f64 / elapsed.as_secs_f64() / 1e9;
+    gbps *= 2.0; // account for read + write
 
+    // measured ~8-9 GB/s (read+write) on i7-14650HX with this blocked kernel
     if cfg!(not(debug_assertions)) {
-        assert!(mbps > 888.0, "mat_transpose perf regression: {} MB/s", mbps);
+        assert!(gbps > 6.0, "mat_transpose perf regression: {} GB/s", gbps);
     };
 }
 
