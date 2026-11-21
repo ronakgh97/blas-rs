@@ -17,7 +17,6 @@ const GEMM_KC: usize = 256; // K block  (L1)
 /// - c: column-major tile with leading dimension ldc
 ///
 /// C is touched exactly once and accumulators stay in registers for all the kc.
-#[inline(always)]
 #[allow(unused)]
 unsafe fn kernel_16x4(
     kc: usize,
@@ -81,7 +80,7 @@ unsafe fn kernel_16x4(
 /// - b: packed, k-major, 6 floats per k step
 /// - c: column-major tile with leading dimension ldc
 ///
-/// C is touched exactly once; accumulators stay in registers for all kc.
+/// C is touched exactly once and accumulators stay in registers for all kc.
 #[inline(always)]
 unsafe fn kernel_16x6(
     kc: usize,
@@ -154,6 +153,7 @@ unsafe fn kernel_16x6(
     }
 }
 
+#[inline(always)]
 unsafe fn pack_a(mc: usize, kc: usize, a: *const f32, rs: usize, cs: usize, dst: *mut f32) {
     unsafe {
         let mut i0 = 0;
@@ -188,6 +188,7 @@ unsafe fn pack_a(mc: usize, kc: usize, a: *const f32, rs: usize, cs: usize, dst:
     }
 }
 
+#[inline(always)]
 unsafe fn pack_b(kc: usize, nc: usize, b: *const f32, rs: usize, cs: usize, dst: *mut f32) {
     unsafe {
         let mut j0 = 0;
@@ -240,6 +241,8 @@ unsafe fn gemm_blocked(
     let mc_max = GEMM_MC.min(m).div_ceil(MR) * MR;
     let nc_max = nc_step;
     let kc_max = GEMM_KC.min(k);
+
+    // TODO: use thread_local scratch buffers
     let mut a_packed = vec![0.0f32; mc_max * kc_max];
     let mut b_packed = vec![0.0f32; kc_max * nc_max];
 
@@ -315,7 +318,7 @@ use crate::GLOBAL_THREAD_POOL;
 use rayon::prelude::*;
 
 #[allow(clippy::too_many_arguments)]
-unsafe fn gemm_par(
+unsafe fn gemm_parallel(
     m: usize,
     n: usize,
     k: usize,
@@ -332,7 +335,8 @@ unsafe fn gemm_par(
     let nt = GLOBAL_THREAD_POOL.current_num_threads();
 
     // too small (2*m*n*k flops), scheduling overhead would dominate
-    if nt == 1 || 2 * m * n * k < (64 << 20) {
+    let flops = 2 * m as u64 * n as u64 * k as u64;
+    if nt == 1 || flops < 100_000_000 {
         unsafe { gemm_blocked(m, n, k, alpha, a, a_rs, a_cs, b, b_rs, b_cs, c, ldc) };
         return;
     }
@@ -341,14 +345,14 @@ unsafe fn gemm_par(
     let split_n = n >= m;
     let (dim, unit) = if split_n { (n, NR) } else { (m, MR) };
     let chunk = dim.div_ceil(nt).div_ceil(unit) * unit;
-    let nchunks = dim.div_ceil(chunk);
+    let n_chunks = dim.div_ceil(chunk);
 
     // cast to usize to smuggle the raw pointers into the rayon task cuz `*mut f32` is not `Send`
     // SAFETY: A/B are read-only in every task and the C slabs are disjoint by construction of the 1D split
     let (ap, bp, cp) = (a as usize, b as usize, c as usize);
 
     GLOBAL_THREAD_POOL.install(|| {
-        (0..nchunks).into_par_iter().for_each(|t| unsafe {
+        (0..n_chunks).into_par_iter().for_each(|t| unsafe {
             let (a, b, c) = (ap as *const f32, bp as *const f32, cp as *mut f32);
             let start = t * chunk;
             let len = chunk.min(dim - start);
@@ -404,7 +408,7 @@ unsafe fn gemm_nn(
     c: *mut f32,
     ldc: usize,
 ) {
-    unsafe { gemm_par(m, n, k, alpha, a, 1, lda, b, 1, ldb, c, ldc) }
+    unsafe { gemm_parallel(m, n, k, alpha, a, 1, lda, b, 1, ldb, c, ldc) }
 }
 
 /// C += alpha * A * B^T
@@ -422,7 +426,7 @@ unsafe fn gemm_nt(
     c: *mut f32,
     ldc: usize,
 ) {
-    unsafe { gemm_par(m, n, k, alpha, a, 1, lda, b, ldb, 1, c, ldc) }
+    unsafe { gemm_parallel(m, n, k, alpha, a, 1, lda, b, ldb, 1, c, ldc) }
 }
 
 /// C += alpha * A^T * B
@@ -440,7 +444,7 @@ unsafe fn gemm_tn(
     c: *mut f32,
     ldc: usize,
 ) {
-    unsafe { gemm_par(m, n, k, alpha, a, lda, 1, b, 1, ldb, c, ldc) }
+    unsafe { gemm_parallel(m, n, k, alpha, a, lda, 1, b, 1, ldb, c, ldc) }
 }
 
 /// C += alpha * A^T * B^T
@@ -458,7 +462,7 @@ unsafe fn gemm_tt(
     c: *mut f32,
     ldc: usize,
 ) {
-    unsafe { gemm_par(m, n, k, alpha, a, lda, 1, b, ldb, 1, c, ldc) }
+    unsafe { gemm_parallel(m, n, k, alpha, a, lda, 1, b, ldb, 1, c, ldc) }
 }
 
 #[inline]
@@ -552,7 +556,8 @@ pub fn gemm(
     }
 }
 
-/// Plain scalar GEMM with no SIMD
+/// Fallback implementation of GEMM for non-x86 platforms or when AVX2/FMA is not available
+#[inline]
 #[allow(unused)]
 #[allow(clippy::too_many_arguments)]
 fn gemm_fallback(
@@ -569,14 +574,103 @@ fn gemm_fallback(
     ta: bool,
     tb: bool,
 ) {
-    for j in 0..n {
-        for p in 0..k {
-            let bv = if tb { b[j + p * ldb] } else { b[p + j * ldb] };
-            for i in 0..m {
-                let av = if ta { a[p + i * lda] } else { a[i + p * lda] };
-                c[i + j * ldc] += alpha * av * bv;
+    if m == 0 || n == 0 || k == 0 {
+        return;
+    }
+
+    #[inline(always)]
+    fn gemm_blocked<const TA: bool, const TB: bool>(
+        m: usize,
+        n: usize,
+        k: usize,
+        alpha: f32,
+        a: &[f32],
+        lda: usize,
+        b: &[f32],
+        ldb: usize,
+        c: &mut [f32],
+        ldc: usize,
+    ) {
+        const MC: usize = 128;
+        const NC: usize = 64;
+
+        const MR: usize = 4;
+        const NR: usize = 4;
+
+        #[inline(always)]
+        fn micro_kernel_4x4<const TA: bool, const TB: bool>(
+            k: usize,
+            alpha: f32,
+            a: &[f32],
+            lda: usize,
+            b: &[f32],
+            ldb: usize,
+            c: &mut [f32],
+            ldc: usize,
+            i: usize,
+            j: usize,
+            rows: usize,
+            cols: usize,
+        ) {
+            let mut acc = [[0.0f32; MR]; NR];
+
+            for p in 0..k {
+                let mut av = [0.0f32; MR];
+                let mut bv = [0.0f32; NR];
+                for r in 0..rows {
+                    let ai = if TA {
+                        p + (i + r) * lda
+                    } else {
+                        i + r + p * lda
+                    };
+
+                    av[r] = a[ai];
+                }
+                for col in 0..cols {
+                    let bi = if TB {
+                        j + col + p * ldb
+                    } else {
+                        p + (j + col) * ldb
+                    };
+
+                    bv[col] = b[bi];
+                }
+                for col in 0..cols {
+                    for r in 0..rows {
+                        acc[col][r] = av[r].mul_add(bv[col], acc[col][r]);
+                    }
+                }
+            }
+            for col in 0..cols {
+                let cbase = (j + col) * ldc + i;
+                for r in 0..rows {
+                    c[cbase + r] = alpha.mul_add(acc[col][r], c[cbase + r]);
+                }
             }
         }
+
+        for jj in (0..n).step_by(NC) {
+            let j_end = (jj + NC).min(n);
+            for ii in (0..m).step_by(MC) {
+                let i_end = (ii + MC).min(m);
+                for j in (jj..j_end).step_by(NR) {
+                    let cols = (j + NR).min(j_end) - j;
+                    for i in (ii..i_end).step_by(MR) {
+                        let rows = (i + MR).min(i_end) - i;
+                        micro_kernel_4x4::<TA, TB>(
+                            k, alpha, a, lda, b, ldb, c, ldc, i, j, rows, cols,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    match (ta, tb) {
+        (false, false) => gemm_blocked::<false, false>(m, n, k, alpha, a, lda, b, ldb, c, ldc),
+        (false, true) => gemm_blocked::<false, true>(m, n, k, alpha, a, lda, b, ldb, c, ldc),
+        (true, false) => gemm_blocked::<true, false>(m, n, k, alpha, a, lda, b, ldb, c, ldc),
+        (true, true) => gemm_blocked::<true, true>(m, n, k, alpha, a, lda, b, ldb, c, ldc),
     }
 }
 
@@ -715,12 +809,11 @@ fn gemm_regress() {
     }
 }
 
-/// Parallel GEMM must be bit-identical to the serial path
 #[test]
 fn gemm_parallel_matches_serial() {
     use crate::utils::Noise;
 
-    // 2*420*380*415 ≈ 132M flops, past the parallel threshold
+    // 2*420*380*415 ~= 132M flops, past the parallel threshold
     // sizes are non-multiples of MR/NR/GEMM_KC to hit every edge-tile path
     // with padded leading dims to hit the strided pack paths
     let (m, n, k) = (420, 380, 415);
@@ -754,15 +847,14 @@ fn gemm_parallel_matches_serial() {
 
                 // serial reference with the same beta handling
                 let mut c_ref = c_init.clone();
-                if beta != 1.0 {
-                    for j in 0..n {
-                        if beta == 0.0 {
-                            c_ref[j * ldc..j * ldc + m].fill(0.0);
-                        } else {
-                            scal(m, beta, &mut c_ref[j * ldc..j * ldc + m], 1);
-                        }
+                for j in 0..n {
+                    if beta == 0.0 {
+                        c_ref[j * ldc..j * ldc + m].fill(0.0);
+                    } else {
+                        scal(m, beta, &mut c_ref[j * ldc..j * ldc + m], 1);
                     }
                 }
+
                 unsafe {
                     gemm_blocked(
                         m,
@@ -793,6 +885,48 @@ fn gemm_parallel_matches_serial() {
                     }
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn simd_gemm_matches_scalar() {
+    use crate::utils::Noise;
+    use std::hint::black_box;
+
+    let mut rng = Noise::rng();
+    let mut a = vec![0.0; 512 * 512];
+    let mut b = vec![0.0; 512 * 512];
+    let mut c = vec![0.0; 512 * 512];
+
+    rng.fill_f32(&mut a);
+    rng.fill_f32(&mut b);
+
+    black_box(&mut a);
+
+    gemm(
+        512, 512, 512, 1.0, &a, 512, &b, 512, 0.0, &mut c, 512, false, false,
+    );
+    let m0 = c.clone();
+
+    c.fill(0.0);
+
+    gemm_fallback(
+        512, 512, 512, 1.0, &a, 512, &b, 512, /* beta=0.0 */ &mut c, 512, false, false,
+    );
+    let m1 = c.clone();
+
+    for j in 0..512 {
+        for i in 0..512 {
+            let idx = i + j * 512;
+            let (a0, a1) = (m0[idx], m1[idx]);
+            let tol = 1e-4 * a1.abs().max(1.0);
+            assert!(
+                (a0 - a1).abs() <= tol,
+                "c[{i},{j}]: simd={}, scalar={}",
+                a0,
+                a1,
+            );
         }
     }
 }

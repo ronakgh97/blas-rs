@@ -37,7 +37,7 @@ lto = "fat"
 debug = true
 
 [dependencies]
-rand = "0.10.3"
+rand = "0.10.4"
 rayon = "1.12.0" # for cpu parallel computations
 # wgpu = "30.0.1" # cross-platform gpu computations
 # pollster = "1.0.1"
@@ -46,7 +46,7 @@ rayon = "1.12.0" # for cpu parallel computations
 [dev-dependencies]
 blas = "0.23.0" # for BLAS bindings, used in the reference implementation and benchmarks
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.9", features = ["derive"] }
 plotters = "0.3.7" # for plotting benchmarks
 core_affinity = "0.8.3"
 colored = "3.1.1"
